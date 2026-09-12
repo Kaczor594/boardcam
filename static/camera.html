@@ -73,6 +73,25 @@
     background: rgba(14, 13, 9, 0.85);
   }
 
+  /* ---------- start-frame lock ---------- */
+  #lock-bar {
+    position: absolute;
+    left: var(--space-4);
+    right: var(--space-4);
+    bottom: var(--space-10);
+    z-index: 5;
+    text-align: center;
+  }
+  #lock-hint, #lock-state {
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-sm);
+    /* The stage is the dark camera view, so the muted grey used elsewhere is
+       unreadable here. */
+    color: var(--paper-10);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  }
+  #lock-state { color: var(--moss-20); font-weight: 600; }
+
   /* ---------- manual corners ---------- */
   #corner-panel {
     position: fixed;
@@ -125,6 +144,11 @@
 <section id="stage" hidden>
   <video id="preview" playsinline muted autoplay></video>
   <svg id="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+  <div id="lock-bar">
+    <button type="button" class="btn btn-primary btn-lg btn-block" id="lock-btn">Board is set</button>
+    <p id="lock-hint">Tap once when the pieces are placed, before White's first move.</p>
+    <p id="lock-state" hidden>Start position locked.</p>
+  </div>
   <div id="stage-footer">
     <span id="upload-label">0 up</span>
     <span class="spacer"></span>
@@ -135,8 +159,11 @@
 
 <div id="corner-panel" hidden>
   <h2>Mark the board corners</h2>
-  <p class="muted" style="margin:0;">Drag each handle onto the square it names.
-  Getting a1 right is what tells the engine which way round the board is.</p>
+  <p class="muted" style="margin:0;">Drag each handle to the <strong>corner of the
+  chequered area</strong> it names, not to the middle of a square. Going round:
+  <strong>a1</strong> is White's near-left corner, then <strong>h1</strong>,
+  <strong>h8</strong>, <strong>a8</strong>. The small red dot is the point that
+  counts.</p>
   <div id="corner-stage">
     <img id="corner-still" alt="Still frame from the camera">
     <svg id="corner-svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>

@@ -252,3 +252,31 @@ def test_an_untouched_game_is_not_exported(client, game, tmp_path):
     import tune
 
     assert tune.export_labelled(tmp_path / "games", tmp_path / "real") == []
+
+
+# ---------------------------------------------------- manual calibration
+
+def test_manual_corners_survive_the_prestart_recalibration(client, game):
+    """The camera re-uploads frame 0 every two seconds until the game starts.
+
+    Each upload re-runs detection, so without a guard the corners a player
+    dragged are overwritten seconds later and the phone is told to ask again.
+    """
+    from server import analysis, storage
+
+    gid = game["game_id"]
+    corners = [[10.0, 10.0], [90.0, 12.0], [92.0, 88.0], [8.0, 90.0]]
+    manual = analysis.set_manual_corners(gid, corners)
+    assert manual["method"] == "manual"
+
+    again = analysis.calibrate_start_frame(gid)
+    assert again["method"] == "manual"
+    assert again["corners"] == manual["corners"]
+    on_disk = storage.read_json(gid, "calibration.json")
+    assert on_disk["method"] == "manual"
+
+    # A fresh process (no in-memory state) must reach the same conclusion.
+    analysis.forget(gid)
+    assert analysis.calibrate_start_frame(gid)["method"] == "manual"
+    # And an explicit re-detect is still possible.
+    assert analysis.calibrate_start_frame(gid, force=True)["method"] != "manual"

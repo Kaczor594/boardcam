@@ -33,6 +33,8 @@ const el = {
   cornerSvg: document.getElementById('corner-svg'),
   cornerUse: document.getElementById('corner-use'),
   cornerCancel: document.getElementById('corner-cancel'),
+  lockBtn: document.getElementById('lock-btn'),
+  lockState: document.getElementById('lock-state'),
 };
 
 let game = null;          // {game_id, room, ...}
@@ -41,6 +43,8 @@ let stream = null;
 let prestartTimer = null;
 let burstTimers = [];
 let started = false;      // true once the first capture command arrives
+let startLocked = false;  // true once the players say the board is set
+let manualCorners = false;// true once a player has placed the corners by hand
 let uploaded = 0;
 let dropped = 0;
 
@@ -230,9 +234,29 @@ function startPrestartLoop() {
   stopPrestartLoop();
   captureOne(0, 0);
   prestartTimer = setInterval(() => {
-    if (started) { stopPrestartLoop(); return; }
+    if (started || startLocked) { stopPrestartLoop(); return; }
     captureOne(0, 0);
   }, PRESTART_INTERVAL_MS);
+}
+
+/**
+ * Freeze the start position.
+ *
+ * Until this is pressed the start frame keeps being replaced every couple of
+ * seconds, and the last replacement lands *after* White has moved — the clock's
+ * first press is White's move, not the start of the game. The engine would then
+ * be tracking against a board that already has a move on it, and every ply
+ * after it reads wrong. One tap when the pieces are placed is what stops that.
+ */
+async function lockStartFrame() {
+  if (!game || startLocked) return;
+  el.lockBtn.disabled = true;
+  await captureOne(0, 0);
+  startLocked = true;
+  stopPrestartLoop();
+  el.lockBtn.hidden = true;
+  el.lockState.hidden = false;
+  toast('Start position locked.');
 }
 
 function stopPrestartLoop() {
@@ -281,73 +305,136 @@ el.video.addEventListener('loadedmetadata', syncOverlay);
 /* ---------------- manual corner fallback ---------------- */
 
 // Board order, not screen order: the engine reads these as a1, h1, h8, a8 and
-// that single ordering is what tells it which way round the board is.
+// that single ordering is what tells it which way round the board is. Each
+// handle marks a *corner of the chequered area*, not the middle of a square.
 const CORNER_NAMES = ['a1', 'h1', 'h8', 'a8'];
 const cornerState = [
   { x: 0.2, y: 0.3 }, { x: 0.8, y: 0.3 },
   { x: 0.85, y: 0.8 }, { x: 0.15, y: 0.8 },
 ];
 
+const NS = 'http://www.w3.org/2000/svg';
+let cornerNodes = [];          // built once; dragging only moves attributes
+
 function openCornerPanel() {
   grabBlob().then((blob) => {
     if (blob) el.cornerStill.src = URL.createObjectURL(blob);
   });
   el.cornerPanel.hidden = false;
-  drawHandles();
+  buildHandles();
 }
 
-function drawHandles() {
-  const NS = 'http://www.w3.org/2000/svg';
+/**
+ * Put the SVG exactly over the still, which `object-fit: contain` letterboxes
+ * inside the stage. With the two aligned, a handle's 0..1 position *is* its
+ * position in the photograph, and no unit conversion can drift.
+ */
+function syncCornerOverlay() {
+  const iw = el.cornerStill.naturalWidth;
+  const ih = el.cornerStill.naturalHeight;
+  if (!iw || !ih) return;
+  const box = el.cornerStill.getBoundingClientRect();
+  const scale = Math.min(box.width / iw, box.height / ih);
+  const w = iw * scale;
+  const h = ih * scale;
+  el.cornerSvg.style.width = `${w}px`;
+  el.cornerSvg.style.height = `${h}px`;
+  el.cornerSvg.style.left = `${(box.width - w) / 2}px`;
+  el.cornerSvg.style.top = `${(box.height - h) / 2}px`;
+}
+
+function buildHandles() {
   el.cornerSvg.replaceChildren();
+  cornerNodes = [];
 
   const poly = document.createElementNS(NS, 'polygon');
-  poly.setAttribute('points', cornerState.map((p) => `${p.x * 100},${p.y * 100}`).join(' '));
   poly.setAttribute('fill', 'rgba(143,164,116,0.15)');
   poly.setAttribute('stroke', '#8FA474');
   poly.setAttribute('stroke-width', '0.5');
   el.cornerSvg.appendChild(poly);
 
-  cornerState.forEach((p, i) => {
-    const g = document.createElementNS(NS, 'circle');
-    g.setAttribute('cx', String(p.x * 100));
-    g.setAttribute('cy', String(p.y * 100));
-    g.setAttribute('r', '3.2');          // ~44px at typical panel sizes
-    g.setAttribute('fill', '#FDFCF8');
-    g.setAttribute('stroke', '#3E5A32');
-    g.setAttribute('stroke-width', '0.8');
-    g.dataset.index = String(i);
-    g.style.cursor = 'grab';
+  cornerState.forEach((_, i) => {
+    const ring = document.createElementNS(NS, 'circle');
+    ring.setAttribute('r', '4');
+    ring.setAttribute('fill', 'rgba(253,252,248,0.35)');
+    ring.setAttribute('stroke', '#3E5A32');
+    ring.setAttribute('stroke-width', '0.7');
+    ring.style.cursor = 'grab';
+    ring.dataset.index = String(i);
+
+    // The ring is the thumb target; this dot is the point that actually lands
+    // on the corner, so it must stay visible under a fingertip.
+    const dot = document.createElementNS(NS, 'circle');
+    dot.setAttribute('r', '0.9');
+    dot.setAttribute('fill', '#A63826');
+    dot.style.pointerEvents = 'none';
 
     const label = document.createElementNS(NS, 'text');
-    label.setAttribute('x', String(p.x * 100));
-    label.setAttribute('y', String(p.y * 100 + 1.2));
     label.setAttribute('text-anchor', 'middle');
-    label.setAttribute('font-size', '3');
-    label.setAttribute('fill', '#3E5A32');
+    label.setAttribute('font-size', '3.4');
+    label.setAttribute('font-weight', '600');
+    label.setAttribute('fill', '#FDFCF8');
+    label.setAttribute('stroke', '#211F1A');
+    label.setAttribute('stroke-width', '0.6');
+    label.setAttribute('paint-order', 'stroke');
     label.style.pointerEvents = 'none';
     label.textContent = CORNER_NAMES[i];
-    g.addEventListener('pointerdown', (ev) => {
-      ev.preventDefault();
-      g.setPointerCapture(ev.pointerId);
-      const move = (m) => {
-        const box = el.cornerSvg.getBoundingClientRect();
-        cornerState[i] = {
-          x: Math.min(1, Math.max(0, (m.clientX - box.left) / box.width)),
-          y: Math.min(1, Math.max(0, (m.clientY - box.top) / box.height)),
-        };
-        drawHandles();
-      };
-      const up = () => {
-        g.removeEventListener('pointermove', move);
-        g.removeEventListener('pointerup', up);
-      };
-      g.addEventListener('pointermove', move);
-      g.addEventListener('pointerup', up);
-    });
-    el.cornerSvg.appendChild(g);
-    el.cornerSvg.appendChild(label);
+
+    el.cornerSvg.append(ring, dot, label);
+    cornerNodes.push({ ring, dot, label, poly });
+  });
+
+  updateHandles();
+  syncCornerOverlay();
+}
+
+function updateHandles() {
+  const pts = cornerState.map((p) => `${p.x * 100},${p.y * 100}`).join(' ');
+  cornerNodes.forEach(({ ring, dot, label, poly }, i) => {
+    const p = cornerState[i];
+    poly.setAttribute('points', pts);
+    ring.setAttribute('cx', String(p.x * 100));
+    ring.setAttribute('cy', String(p.y * 100));
+    dot.setAttribute('cx', String(p.x * 100));
+    dot.setAttribute('cy', String(p.y * 100));
+    // Label sits clear of the ring so a finger never hides the aim point.
+    label.setAttribute('x', String(p.x * 100));
+    label.setAttribute('y', String(p.y * 100 - 5.5));
   });
 }
+
+// One listener on the SVG, which is never rebuilt mid-drag. The old code
+// redrew every node on each pointermove, which destroyed the very circle
+// holding the pointer capture — so a handle moved once per swipe and then
+// went dead.
+el.cornerSvg.addEventListener('pointerdown', (ev) => {
+  const index = ev.target instanceof Element ? ev.target.dataset?.index : undefined;
+  if (index === undefined) return;
+  ev.preventDefault();
+  const i = Number(index);
+  el.cornerSvg.setPointerCapture(ev.pointerId);
+
+  const move = (m) => {
+    const box = el.cornerSvg.getBoundingClientRect();
+    cornerState[i] = {
+      x: Math.min(1, Math.max(0, (m.clientX - box.left) / box.width)),
+      y: Math.min(1, Math.max(0, (m.clientY - box.top) / box.height)),
+    };
+    updateHandles();
+  };
+  const up = () => {
+    el.cornerSvg.removeEventListener('pointermove', move);
+    el.cornerSvg.removeEventListener('pointerup', up);
+    el.cornerSvg.removeEventListener('pointercancel', up);
+  };
+  el.cornerSvg.addEventListener('pointermove', move);
+  el.cornerSvg.addEventListener('pointerup', up);
+  el.cornerSvg.addEventListener('pointercancel', up);
+});
+
+el.cornerStill.addEventListener('load', syncCornerOverlay);
+window.addEventListener('resize', syncCornerOverlay);
+window.addEventListener('orientationchange', () => setTimeout(syncCornerOverlay, 300));
 
 el.cornerCancel.addEventListener('click', () => { el.cornerPanel.hidden = true; });
 el.cornerUse.addEventListener('click', async () => {
@@ -355,21 +442,24 @@ el.cornerUse.addEventListener('click', async () => {
     toast('No game to calibrate yet.');
     return;
   }
-  // The panel works in normalised coordinates, and the engine reads the stored
-  // JPEG — which is the video scaled to LONG_EDGE, not the video itself.
-  const vw = el.video.videoWidth || 1;
-  const vh = el.video.videoHeight || 1;
-  const scale = Math.min(1, LONG_EDGE / Math.max(vw, vh));
-  const w = Math.round(vw * scale);
-  const h = Math.round(vh * scale);
+  // The handles are already in the photograph's own coordinates, because the
+  // overlay is aligned to it, so this is a straight multiply.
+  const iw = el.cornerStill.naturalWidth || LONG_EDGE;
+  const ih = el.cornerStill.naturalHeight || LONG_EDGE;
   const corners = cornerState.map((p) => [
-    Number((p.x * w).toFixed(1)), Number((p.y * h).toFixed(1))]);
+    Number((p.x * iw).toFixed(1)), Number((p.y * ih).toFixed(1))]);
+  el.cornerUse.disabled = true;
+  el.cornerUse.textContent = 'Saving…';
   try {
     await api(`/api/games/${game.game_id}/corners`, { method: 'POST', body: { corners } });
+    manualCorners = true;
     el.cornerPanel.hidden = true;
-    toast('Corners saved.');
+    toast('Corners saved. They will not be overwritten.');
   } catch (err) {
     toast(`Could not save corners: ${err.message}`);
+  } finally {
+    el.cornerUse.disabled = false;
+    el.cornerUse.textContent = 'Use these corners';
   }
 });
 
@@ -386,12 +476,16 @@ function onMessage(msg) {
     case 'capture':
       started = true;
       stopPrestartLoop();
+      el.lockBtn.hidden = true;
+      startLocked = true;
       startBurst(msg.seq);
       break;
     case 'calibration':
       setDot(el.calDot, msg.ok ? 'ok' : (msg.warning ? 'warn' : 'error'));
       if (msg.ok && msg.corners) drawCalibration(msg.corners);
-      if (!msg.ok) openCornerPanel();
+      // Never reopen over corners a player already placed by hand: the panel
+      // popping back up is how they learn their work was thrown away.
+      if (!msg.ok && msg.method !== 'manual' && !manualCorners) openCornerPanel();
       break;
     case 'analysis.ready': {
       const flagged = Array.isArray(msg.flagged) ? msg.flagged.length : (msg.flagged || 0);
@@ -407,6 +501,7 @@ function onMessage(msg) {
 
 el.startBtn.addEventListener('click', startCamera);
 el.restartBtn.addEventListener('click', startCamera);
+el.lockBtn.addEventListener('click', lockStartFrame);
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !stream) return;

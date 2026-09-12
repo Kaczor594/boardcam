@@ -49,9 +49,17 @@ It prints the two URLs. Then:
    game and shows a 4-character room code and a QR code.
 2. **Clock phone second.** Scan the QR, or open `/clock` and type the code.
    The camera page's "clock" dot turns green.
-3. Check the preview: the whole board plus a margin must be in frame.
-4. Play. White presses first, after white's move.
-5. Press **Stop** and pick the result. The last position is photographed even
+3. Check the preview: the board should **fill most of the frame**, with a little
+   room above its far edge and as little floor as possible (§4).
+4. Set the pieces up, then tap **"Board is set"** on the camera phone. This
+   freezes the start-position photograph.
+
+   It matters more than it looks. Until it is tapped the start frame is
+   replaced every two seconds, and the clock's first press comes *after* White
+   has moved — so without the tap the engine's "initial position" already has a
+   move in it, and every ply after that is read against the wrong board.
+5. Play. White presses first, after white's move.
+6. Press **Stop** and pick the result. The last position is photographed even
    if the final move was never clocked.
 
 The Mac must stay awake and on the same internet connection for the whole
@@ -69,10 +77,19 @@ This is the part that decides whether the engine works.
   The engine is built and tested at roughly 30° above the board plane
   (about 2 ft up, 3–4 ft to the side), so 30° works — but every extra 10°
   makes it easier.
-- **Whole board plus a margin in frame**, with a little room above the far
-  edge. The engine looks at the board and a strip above its far edge and
-  ignores everything else, so hands at rest, the players and captured pieces
-  are only a problem if they sit *on* the board area.
+- **Fill the frame with the board.** A little room above the far edge, and as
+  little of the surroundings as the stand allows. This is what decides whether
+  automatic calibration works at all: the detector looks for the most
+  convincing set of nine evenly spaced parallel lines in the picture, and a
+  **hardwood floor or a planked table is a better grid than a chessboard** —
+  its lines are longer, straighter and higher contrast than a square edge. On
+  the first real game the board filled about 15 % of the frame and every
+  candidate the detector produced was on the floorboards. Cropped to the board,
+  the same photograph nearly passed.
+- Landscape beats portrait for this: it puts the board's long axis along the
+  frame's long axis and leaves less room for floor.
+- Hands at rest, the players and captured pieces are only a problem if they sit
+  *on* the board area.
 - **Put the clock phone and the captured pieces outside the board rectangle.**
 - **Do not move the stand mid-game.** A small bump is tolerated; a
   repositioning is not.
@@ -90,10 +107,23 @@ This is the part that decides whether the engine works.
 - Pausing the clock does not photograph anything. Adjust a leaning piece during
   a pause and the engine will never see it.
 
-## 6. After the game
+## 6. If calibration fails
 
-The clock phone shows the PGN with a copy button and a lichess import link.
-Everything is also on the Mac under `data/games/<game_id>/`.
+The camera page opens a corner panel when it cannot find the board. Drag each
+handle to the **corner of the chequered area** it names, not to the middle of a
+square: `a1` is White's near-left corner, then `h1`, `h8`, `a8` going round. The
+small red dot inside each ring is the point that counts. Getting `a1` right is
+what tells the engine which way round the board is.
+
+Corners placed by hand are final — the pre-start re-detection will not overwrite
+them, and the panel will not reappear.
+
+## 7. After the game
+
+The clock phone shows the PGN with a copy button, a lichess import link and a
+link to the review page. Everything is also on the Mac under
+`data/games/<game_id>/`, and `/review?game=<id>` is where a wrong ply gets
+fixed.
 
 ## Troubleshooting
 

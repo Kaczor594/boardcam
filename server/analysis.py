@@ -67,11 +67,23 @@ def _frames_for(game_id: str, seq: int) -> list[Path]:
 # Calibration
 # --------------------------------------------------------------------------
 
-def calibrate_start_frame(game_id: str) -> dict:
-    """Find the board in the start-position frame. Safe to call repeatedly."""
+def calibrate_start_frame(game_id: str, force: bool = False) -> dict:
+    """Find the board in the start-position frame. Safe to call repeatedly.
+
+    Corners a player dragged by hand always win. Before the game starts the
+    camera re-uploads frame 0 every couple of seconds, and each upload lands
+    here — so without this guard an automatic detection that keeps failing
+    overwrites the manual corners seconds after they are saved, and tells the
+    camera to reopen the panel. From the phone that looks like the button did
+    nothing.
+    """
     from engine.calibrate import CHECKER_MIN, calibrate
 
     state = for_game(game_id)
+    if state.calibration is None:                 # survive a server restart
+        state.calibration = storage.read_json(game_id, "calibration.json")
+    if not force and (state.calibration or {}).get("method") == "manual":
+        return state.calibration
     paths = _frames_for(game_id, 0)
     if not paths:
         return {"ok": False, "warning": "no start frame yet"}
@@ -122,6 +134,7 @@ def set_manual_corners(game_id: str, corners) -> dict:
         cal.warnings = list(cal.warnings) + ["manual-corners"]
         payload = cal.to_json()
         payload["manual_corners_needed"] = False
+        payload["method"] = "manual"
         state.calibration = payload
         state.tracker = None
         storage.game_dir(game_id).joinpath("calibration.json").write_text(
