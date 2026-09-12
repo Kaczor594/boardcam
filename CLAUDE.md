@@ -11,5 +11,7 @@ Spec: `planning/specs/2026-09-12-boardcam.md` (read it first; `/spec build` it).
 - Engine work is gated by `engine.evaluate` on `data/synth/*`; regenerate the
   corpora with the seeds in the spec before comparing numbers.
 - Vision-LLM calls use `ANTHROPIC_API_KEY` from the environment (personal key);
-  load the `claude-api` skill before touching `engine/vision_llm.py`.
+  load the `claude-api` skill before touching `engine/vision_llm.py`. Tests that
+  hit the real API are marked `live` and only run under `pytest -m live`.
+- Session context and the open field-test issues live in `CLAUDE_HANDOFF.md`.
 - Commit per phase; append the short hash to the spec's `commits`.

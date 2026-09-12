@@ -17,9 +17,12 @@ frames resolve earlier ambiguities.
 
 ## Status
 
-Phase 1 of 6 complete: server, clock page, camera page, pairing and tunnel.
-The physical workflow runs end to end and stores frames; there is no engine yet.
-See `planning/specs/2026-09-12-boardcam.md` for the remaining phases.
+Phases 1–5 of 6 complete: the phone pages, the synthetic renderer, board
+calibration, the tracking engine, the vision-LLM fallback, and the review and
+correction loop. Phase 6 is the field test, and it is where the open work is —
+three real games have been recorded and none has yet produced a correct PGN. The
+causes are diagnosed in `CLAUDE_HANDOFF.md`; the plan is
+`planning/specs/2026-09-12-boardcam.md`.
 
 ## Quick start
 
