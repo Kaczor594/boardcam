@@ -128,6 +128,22 @@
     #control-bar #stop-btn { color: var(--terra-30); border-color: var(--terra-50); }
     #control-bar #stop-btn:hover:not(:disabled) { background: rgba(185, 111, 62, 0.14); }
 
+    /* ---------- finished banner ---------- */
+    #finished-banner {
+      position: fixed;
+      left: var(--space-3);
+      right: var(--space-3);
+      top: var(--space-3);
+      z-index: 30;
+      margin: 0;
+      padding: var(--space-3);
+      border-radius: var(--radius-md);
+      background: var(--terra-50);
+      color: var(--paper-00);
+      font-size: var(--text-sm);
+      text-align: center;
+    }
+
     /* ---------- analysis panel ---------- */
     #analysis-panel {
       position: fixed;
@@ -216,6 +232,8 @@
       </div>
     </div>
   </div>
+
+  <p id="finished-banner" hidden></p>
 
   <div id="analysis-panel" hidden>
     <h2>Analysis</h2>

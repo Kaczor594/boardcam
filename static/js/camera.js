@@ -57,9 +57,15 @@ async function ensureGame() {
   const existing = new URLSearchParams(location.search).get('game');
   if (existing) {
     try {
-      // A reload after a crash must rejoin, not orphan the game.
+      // A reload mid-game must rejoin, not orphan the game. A *finished* game
+      // must never be rejoined: its frames are numbered, its clock has stopped,
+      // and a second session would be recorded on top of the first one — two
+      // games in one directory, which is not recoverable from the phone.
       const detail = await api(`/api/games/${existing}`);
-      return { game_id: detail.game_id, room: detail.room };
+      if (detail.status !== 'finished') {
+        return { game_id: detail.game_id, room: detail.room };
+      }
+      toast('That game is finished. Starting a new one.');
     } catch {
       toast('That game is gone. Starting a new one.');
     }

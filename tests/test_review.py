@@ -280,3 +280,54 @@ def test_manual_corners_survive_the_prestart_recalibration(client, game):
     assert analysis.calibrate_start_frame(gid)["method"] == "manual"
     # And an explicit re-detect is still possible.
     assert analysis.calibrate_start_frame(gid, force=True)["method"] != "manual"
+
+
+# ------------------------------------------------- a finished game is closed
+
+def test_a_finished_game_refuses_new_play(client):
+    """The second field test recorded two games into one directory.
+
+    A clock phone that never reloaded keeps the old room and carries its press
+    counter on from the finished game, so its presses interleave a new game with
+    the old one's frames. Both ends of that are refused now.
+    """
+    from server import storage
+
+    created = client.post("/games", json={}).json()
+    gid, room = created["game_id"], created["room"]
+
+    with client.websocket_connect(f"/ws/{room}?role=clock") as ws:
+        ws.receive_json()                                   # hello
+        ws.send_json({"type": "clock.start", "seq": 1, "side": "white",
+                      "white_ms": 600_000, "black_ms": 600_000, "t": 1})
+        ws.send_json({"type": "clock.stop", "seq": 2, "result": "1-0", "t": 2})
+        for _ in range(12):
+            msg = ws.receive_json()
+            if msg.get("type") == "analysis.error":
+                break                                       # no frames to track
+
+        assert storage.read_meta(gid)["status"] == "finished"
+
+        # A press after the game is over is refused, with a reason.
+        ws.send_json({"type": "clock.press", "seq": 3, "side": "white",
+                      "white_ms": 590_000, "black_ms": 590_000, "t": 3})
+        for _ in range(12):
+            msg = ws.receive_json()
+            if msg.get("type") == "game.finished":
+                break
+        else:
+            raise AssertionError("never told the clock the game was finished")
+        assert msg["result"] == "1-0"
+
+    events = storage.read_events(gid)
+    assert [e["type"] for e in events] == ["clock.start", "clock.stop"]
+
+    # The start frame of a finished game cannot be overwritten either, but the
+    # burst the final stop commanded is still allowed in.
+    jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 64 + b"\xff\xd9"
+    assert client.post(f"/games/{gid}/frames/0/0",
+                       files={"file": ("f.jpg", jpeg, "image/jpeg")}).status_code == 409
+    assert client.post(f"/games/{gid}/frames/99/0",
+                       files={"file": ("f.jpg", jpeg, "image/jpeg")}).status_code == 409
+    assert client.post(f"/games/{gid}/frames/2/0",
+                       files={"file": ("f.jpg", jpeg, "image/jpeg")}).status_code == 200

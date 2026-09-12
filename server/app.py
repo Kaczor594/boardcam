@@ -142,6 +142,16 @@ async def upload_frame(game_id: str, seq: int, k: int, file: UploadFile = File(.
     # JPEG SOI marker. Cheap, and it keeps a stray HTML error page off disk.
     if len(blob) < 4 or blob[:2] != b"\xff\xd8":
         raise HTTPException(status_code=415, detail="expected a JPEG body")
+
+    # A finished game's frames are history. The one exception is the burst the
+    # final stop itself commanded, which necessarily lands after the game is
+    # marked finished — so anything at or below the last commanded seq is still
+    # welcome, and a stale camera's pre-start loop (which uploads seq 0 forever)
+    # is not.
+    if storage.read_meta(game_id).get("status") == "finished":
+        if seq == 0 or seq > storage.max_seq(game_id):
+            raise HTTPException(status_code=409,
+                                detail="this game is finished; start a new one")
     try:
         path = storage.write_frame(game_id, seq, k, blob)
     except ValueError as exc:
@@ -389,8 +399,26 @@ def _status_for(event_type: str, current: str) -> str | None:
     }.get(event_type)
 
 
+# Events that would record a *new* game. `clock.config` and `clock.reset` are
+# harmless on a finished game; these are not.
+PLAY_EVENTS = {"clock.start", "clock.press", "clock.pause",
+               "clock.resume", "clock.flag", "clock.stop"}
+
+
 async def _handle_clock_event(room: str, game_id: str, msg: dict) -> None:
     event_type = msg["type"]
+
+    # A clock phone that never reloaded still holds the old room, and its press
+    # counter carries on from the finished game's. Left alone it writes a second
+    # game into the first one's frames and event log, interleaved and with no
+    # way to tell them apart afterwards. Refuse, and say why.
+    meta = storage.read_meta(game_id)
+    if event_type in PLAY_EVENTS and meta.get("status") == "finished":
+        await hub.send(room, "clock", {"type": "game.finished",
+                                       "game_id": game_id,
+                                       "result": meta.get("result")})
+        return
+
     stored = storage.append_event(game_id, msg)
 
     fields: dict = {}

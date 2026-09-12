@@ -62,6 +62,7 @@ const el = {
   lichessLink: document.getElementById('lichess-link'),
   reviewLink: document.getElementById('review-link'),
   flaggedCount: document.getElementById('flagged-count'),
+  finishedBanner: document.getElementById('finished-banner'),
 };
 
 /* ---------------- state ---------------- */
@@ -175,9 +176,10 @@ function handleServerMessage(msg) {
       // The state machine restarts at seq 0 on a reload, but the game's frames
       // are already numbered on disk. Take the server's count as a floor so a
       // reconnected clock writes new frames after them, never over them.
-      if (typeof msg.seq === 'number') {
+      if (typeof msg.seq === 'number' && msg.status !== 'finished') {
         seqBase = Math.max(seqBase, msg.seq - sm.seq);
       }
+      if (msg.status === 'finished') gameIsOver(msg.result);
       setDot(el.pairedDot, msg.peer_connected ? 'ok' : null);
       break;
     }
@@ -198,9 +200,30 @@ function handleServerMessage(msg) {
       showAnalysis(msg);
       break;
     }
+    case 'game.finished': {
+      // The server refused a press because this game has already been played.
+      gameIsOver(msg.result);
+      break;
+    }
     default:
       break; // unknown types are ignored per PROTOCOL.md
   }
+}
+
+/**
+ * This room belongs to a game that is already over.
+ *
+ * Pressing on would append a second game to the first one's frames and event
+ * log, which is exactly what happened on the second field test. The way out is
+ * a new game, which the camera phone creates.
+ */
+function gameIsOver(result) {
+  if (finishedNotice) return;
+  finishedNotice = true;
+  el.finishedBanner.hidden = false;
+  el.finishedBanner.textContent = result
+    ? `This game is finished (${result}). Start a new one on the camera phone and scan the new code.`
+    : 'This game is finished. Start a new one on the camera phone and scan the new code.';
 }
 
 function showAnalysis(msg) {
@@ -323,6 +346,7 @@ refreshChipPressed();
 // continue the same numbering from here.
 let lastCaptureSeq = 0;
 let seqBase = 0;   // offset applied to the state machine's press count
+let finishedNotice = false;   // true once we have said the game is over
 
 function wireSeq(smSeq) {
   return seqBase + smSeq;
