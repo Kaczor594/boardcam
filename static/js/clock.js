@@ -60,6 +60,7 @@ const el = {
   analysisPre: document.getElementById('analysis-pre'),
   copyPgnBtn: document.getElementById('copy-pgn-btn'),
   lichessLink: document.getElementById('lichess-link'),
+  reviewLink: document.getElementById('review-link'),
   flaggedCount: document.getElementById('flagged-count'),
 };
 
@@ -211,8 +212,16 @@ function showAnalysis(msg) {
   } else {
     el.lichessLink.hidden = true;
   }
+  const reviewUrl = msg.review_url || (msg.game_id ? `/review?game=${msg.game_id}` : null);
+  if (reviewUrl) {
+    el.reviewLink.href = reviewUrl;
+    el.reviewLink.hidden = false;
+  }
   const flaggedCount = Array.isArray(msg.flagged) ? msg.flagged.length : (msg.flagged || 0);
-  el.flaggedCount.textContent = `${flaggedCount} flagged ply${flaggedCount === 1 ? '' : 's'}`;
+  const plies = msg.plies != null ? `${msg.plies} plies, ` : '';
+  el.flaggedCount.textContent = flaggedCount
+    ? `${plies}${flaggedCount} ply${flaggedCount === 1 ? '' : 'ies'} worth a second look`
+    : `${plies}nothing flagged`;
 }
 
 el.copyPgnBtn.addEventListener('click', async () => {

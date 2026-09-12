@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Review · BoardCam</title>
+<link rel="stylesheet" href="/static/css/boardcam.css">
+<style>
+  .wrap.wide { max-width: 1100px; }
+
+  header.page { display: flex; align-items: baseline; gap: var(--space-4); flex-wrap: wrap; }
+  .gid { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); }
+
+  #game-header { margin-bottom: var(--space-5); }
+  #header-actions { flex-wrap: wrap; }
+  #meta-line { margin: var(--space-1) 0 0; }
+  #result-row, #verify-row { margin-top: var(--space-4); align-items: center; }
+
+  /* Two-column desktop layout: move list stays put, detail pane does the
+     work. Stacks to one column once there is no room for both. */
+  .review-grid {
+    display: grid;
+    grid-template-columns: minmax(240px, 320px) 1fr;
+    gap: var(--space-5);
+    align-items: start;
+  }
+  @media (max-width: 760px) {
+    .review-grid { grid-template-columns: 1fr; }
+  }
+
+  #movelist-card { position: sticky; top: var(--space-5); }
+  @media (max-width: 760px) { #movelist-card { position: static; } }
+
+  .movelist-scroll { max-height: 60vh; overflow-y: auto; }
+  table.movelist { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: var(--text-sm); }
+  table.movelist td { padding: 2px 4px; vertical-align: top; }
+  table.movelist td.movenum { color: var(--fg-3); text-align: right; padding-right: var(--space-2); width: 2.2em; }
+  .ply { display: inline-block; cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm); }
+  .ply:hover { background: var(--bg-sunken); }
+  .ply.selected { background: var(--brand-soft); box-shadow: inset 0 0 0 1px var(--moss-30); }
+  .ply.flash { animation: ply-flash 1.6s var(--ease-out); }
+  @keyframes ply-flash {
+    0%   { background: var(--moss-20); }
+    100% { background: transparent; }
+  }
+
+  .badge {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.5;
+    padding: 0 4px;
+    margin-left: 4px;
+    border-radius: var(--radius-xs);
+    vertical-align: middle;
+    white-space: nowrap;
+  }
+  .badge-warn   { background: var(--terra-10); color: var(--terra-50); border: 1px solid var(--terra-30); }
+  .badge-error  { background: rgba(166, 56, 38, 0.08); color: var(--negative); border: 1px solid var(--negative); }
+  .badge-pinned { background: var(--brand-soft); color: var(--moss-60); border: 1px solid var(--moss-30); }
+
+  #detail-card { min-height: 200px; }
+  #detail-title { margin-bottom: var(--space-2); }
+  #detail-flags { margin-bottom: var(--space-4); }
+
+  .frame-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
+  }
+  .frame-grid figure { margin: 0; }
+  .frame-grid img {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    display: block;
+    background: var(--bg-sunken);
+    border: 1px solid var(--line-1);
+    border-radius: var(--radius-sm);
+    min-height: 60px;
+  }
+  .frame-grid figcaption { font-size: var(--text-xs); color: var(--fg-3); margin-top: var(--space-1); text-align: center; }
+  .img-fallback { font-size: var(--text-xs); color: var(--fg-3); text-align: center; padding: var(--space-4) 0; }
+  @media (max-width: 480px) { .frame-grid { grid-template-columns: 1fr; } }
+
+  .candidates { list-style: none; margin: 0 0 var(--space-5); padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+  .candidate-row {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--line-1);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+  }
+  .candidate-row:hover { background: var(--bg-sunken); }
+  .candidate-row.top { border-color: var(--moss-30); }
+  .candidate-row .delta { color: var(--fg-3); }
+
+  .kv-strip { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-5); }
+  .kv {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--fg-2);
+    background: var(--bg-sunken);
+    border: 1px solid var(--line-1);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+  }
+
+  #correction-block .row { align-items: stretch; }
+  #san-input { max-width: 220px; }
+  #correction-status { font-size: var(--text-sm); color: var(--fg-3); }
+
+  #pgn-card { margin-top: var(--space-5); }
+  #pgn-text {
+    margin: 0;
+    max-height: 40vh;
+    overflow: auto;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+</style>
+</head>
+<body>
+<main class="wrap wide">
+  <header class="page">
+    <div>
+      <p class="eyebrow">BoardCam</p>
+      <h1 style="margin-bottom: var(--space-1);">Review</h1>
+    </div>
+    <span class="spacer"></span>
+    <a href="/games">All games</a>
+  </header>
+
+  <p class="muted" id="status-msg"></p>
+
+  <div id="content" hidden>
+    <section class="card" id="game-header">
+      <div class="row" style="justify-content: space-between; align-items: flex-start;">
+        <div>
+          <h2 id="players" style="margin-bottom: var(--space-1);"></h2>
+          <p class="muted num" id="meta-line"></p>
+        </div>
+        <div class="row" id="header-actions">
+          <button type="button" class="btn" id="copy-pgn-btn">Copy PGN</button>
+          <button type="button" class="btn" id="lichess-btn">Open in lichess</button>
+          <a class="btn" id="lichess-link" href="#" target="_blank" rel="noopener" hidden>Open in lichess</a>
+          <button type="button" class="btn btn-danger" id="delete-btn">Delete game</button>
+        </div>
+      </div>
+
+      <div class="row" id="result-row">
+        <span class="eyebrow">Result</span>
+        <div class="chip-row" id="result-chips"></div>
+      </div>
+
+      <div class="row" id="verify-row">
+        <button type="button" class="chip" id="verify-toggle" aria-pressed="false">Confirm this game is correct</button>
+        <span class="muted" style="font-size: var(--text-sm);">Marks the current move list as training truth for scripts/tune.py.</span>
+      </div>
+    </section>
+
+    <div class="review-grid">
+      <section class="card" id="movelist-card">
+        <h3>Moves</h3>
+        <div class="movelist-scroll">
+          <table class="movelist"><tbody id="move-rows"></tbody></table>
+        </div>
+      </section>
+
+      <section class="card" id="detail-card">
+        <p class="muted" id="detail-empty">Select a ply to inspect it.</p>
+        <div id="detail-body" hidden>
+          <h3 id="detail-title"></h3>
+          <div class="chip-row" id="detail-flags"></div>
+
+          <div class="frame-grid">
+            <figure><img id="img-raw-before" alt="before, raw"><figcaption>Before (raw)</figcaption></figure>
+            <figure><img id="img-raw-after" alt="after, raw"><figcaption>After (raw)</figcaption></figure>
+            <figure><img id="img-rect-before" alt="before, rectified"><figcaption>Before (rectified)</figcaption></figure>
+            <figure><img id="img-rect-after" alt="after, rectified"><figcaption>After (rectified)</figcaption></figure>
+          </div>
+
+          <h3>Candidates</h3>
+          <ul class="candidates" id="candidates-list"></ul>
+
+          <h3>Frame record</h3>
+          <div class="kv-strip" id="frame-kv"></div>
+
+          <div class="stack" id="correction-block">
+            <label for="san-input">Correction (SAN)</label>
+            <div class="row">
+              <input type="text" id="san-input" placeholder="e.g. Nxe5" autocomplete="off">
+              <button type="button" class="btn btn-primary" id="correct-btn">Mark wrong &rarr; correct</button>
+              <button type="button" class="btn" id="unpin-btn" hidden>Unpin</button>
+              <span id="correction-status" hidden>Re-running&hellip;</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <section class="card" id="pgn-card">
+      <h3>PGN</h3>
+      <pre id="pgn-text"></pre>
+    </section>
+  </div>
+</main>
+
+<script type="module" src="/static/js/review.js"></script>
+</body>
+</html>

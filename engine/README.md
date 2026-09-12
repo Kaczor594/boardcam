@@ -477,3 +477,32 @@ is therefore the first point this module's actual value can be measured, and
 its cost (`$0.007`/sonnet call, `$0.024` on an escalation to Opus, from the
 smoke test's real usage) is in line with the gate's `≤ $0.15`/game budget even
 if every flagged ply in a real game escalated.
+
+---
+
+## Corrections (Phase 5)
+
+A correction is a **re-run, not an edit**. `Tracker.constrain(ply, move)` (and
+`track_game(..., constraints={ply: move})`, which is what the server uses after a
+game is finished and its live tracker has been dropped) pins a ply and tracks the
+whole game again. That is the point: a ply read wrongly usually takes the plies
+after it with it, because the board the tracker was matching against was wrong
+from there on, and re-running is what puts those back.
+
+**A pinned move is forced into the candidate pool.** Each frame expands only the
+top `children_per_path` candidates per beam path, and a ply is corrected exactly
+when the truth was *not* in that handful — so with constraints in play, `_step`
+filters the full scored list by `_allowed` and takes the best `children` of
+what survives, instead of filtering the top few and often finding nothing left.
+Before this, pinning a move the frame scored poorly produced an empty game: every
+candidate was constrained away, the beam advanced no plies, and the corrected
+game came back with no moves at all.
+
+The server side (`server/review.py`) keeps the human input, not just its result:
+`labels.json` stores the pins (`corrections`) alongside the move list they
+produced (`moves`). A later engine can be re-constrained from the same pins
+without anyone labelling the game twice, and `scripts/tune.py --dry-run` promotes
+any game with a pin or a "verified" flag into `data/real/<id>/` with a
+`truth.pgn` (frames symlinked, not copied) before it fits anything.
+
+Wire contract for all of it: `docs/PROTOCOL.md` §8.

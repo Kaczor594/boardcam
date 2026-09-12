@@ -391,7 +391,13 @@ class Tracker:
                 best_obs = obs
             local_top = scored[0][1]
             best_overall = max(best_overall, local_top)
-            for cand, sc in scored[:children]:
+            # A pinned ply is a human saying what happened, so it has to be
+            # reachable even when the photograph scores it badly — which is the
+            # normal case, since a ply is corrected precisely when the engine
+            # ranked the truth below the first few candidates.
+            pool = ([cs for cs in scored if self._allowed(path, cs[0])][:children]
+                    if self.constraints else scored[:children])
+            for cand, sc in pool:
                 # One frame may only punish a path so far. A hand over the board
                 # makes every candidate score badly and their differences are
                 # noise; unclipped, that noise is enough to evict the right game

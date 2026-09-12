@@ -305,3 +305,154 @@ validates it and the ngrok binary *before* starting uvicorn, so a missing
 variable does not leave a stray server bound to the port. Every `fetch` and the
 WebSocket upgrade send `ngrok-skip-browser-warning: 1`; only the first
 navigation per phone per session hits the interstitial.
+
+---
+
+## 8. Review and correction (Phase 5)
+
+The review page is a Mac-browser surface, not a phone one: it is opened from the
+games list (`/review?game=<game_id>`) after a game finishes and it is where a
+wrong ply gets fixed. Everything it needs is behind the endpoints below, and the
+tracker is re-run server-side on every correction — the page never edits a move
+list locally.
+
+### `GET /api/games/{game_id}/review`
+
+One fetch, everything the page renders.
+
+```json
+{
+  "game_id": "20260912-143355-a7f3",
+  "room": "K4WQ",
+  "status": "finished",
+  "created_at": 1789...,
+  "white_name": "White", "black_name": "Black",
+  "result": "1-0",
+  "lichess_url": "https://lichess.org/xxxxxxxx",
+  "pending": false,
+  "pgn": "[Event \"BoardCam\"]\n…",
+  "frames": [{"seq": 0, "k": [0]}, {"seq": 1, "k": [0, 1, 2]}],
+  "labels": {"corrections": [{"ply": 12, "san": "Nxe5", "uci": "f3e5", "t": 1789...}],
+             "result": null, "verified": false, "moves": ["e4", "e5", "…"]},
+  "analysis": {
+    "moves": ["e2e4", "e7e5", "…"],
+    "plies": [
+      {"index": 0, "san": "e4", "uci": "e2e4", "seq": 1,
+       "margin": 41.8, "flags": [],
+       "candidates": [{"san": "e4", "uci": "e2e4", "n": 1, "score": -12.3},
+                      {"san": "e3", "uci": "e2e3", "n": 1, "score": -31.0}]}
+    ],
+    "frames": [{"seq": 1, "blobs": 2, "mass": 812.0, "shift": [0.4, -0.2],
+                "warnings": [], "best": -12.3, "unexplained": false,
+                "llm_cost": 0.007, "llm_model": "claude-sonnet-5",
+                "llm_confidence": 0.82, "llm_choice": "Nf3"}],
+    "final_fen": "…", "warnings": [],
+    "calibration": {...}, "camera": {...}
+  }
+}
+```
+
+`pending` is `true` when the game has no `analysis.json` yet (still being played,
+or the tracker failed); `analysis` is then `null` and the page shows why.
+
+Ply fields the page depends on:
+
+| field | meaning |
+|---|---|
+| `index` | 0-based ply number; `index 0` is white's first move |
+| `seq` | the **capture** this ply was read from — *not* `index + 1` (a missed press puts two plies on one capture). This is the "after" image; the "before" image is the previous ply's `seq`, or `0` for `index 0` |
+| `margin` | nats of confidence; `null` means infinite (nothing disagreed) |
+| `flags` | `low_margin` (ask someone), `unexplained` (the frame made no sense — a hand over the board), `promotion_unknown` (every promotion carries this; the engine cannot name the piece) |
+| `candidates` | up to 6 alternatives at the frame that decided this ply, best first, `score` in nats |
+
+A ply with an empty `flags` is confident; a ply with any flag is what the page
+exists to show. `corrections` in `labels` marks plies a human has pinned — those
+are authoritative and re-running never changes them.
+
+### `GET /games/{game_id}/frames/{seq}/{k}`
+
+The raw camera JPEG (§2). `k` is the burst index; `k=0` is the one the engine
+usually used.
+
+### `GET /api/games/{game_id}/rect/{seq}`
+
+The same capture **rectified** to a top-down 512×512 board (a8 top-left, h1
+bottom-right — white at the bottom, like a diagram), as JPEG.
+
+| query | meaning |
+|---|---|
+| `k` | burst index, default `0` |
+| `prev` | another capture's `seq`; squares that changed between the two are outlined in amber |
+| `squares` | comma-separated algebraic squares (`e2,e4`) outlined in red — the page passes the from/to of the candidate it is showing |
+| `size` | edge in pixels, 128–1024, default 512 |
+
+`404` if the capture or the calibration is missing.
+
+### `POST /api/games/{game_id}/corrections`
+
+```json
+{"ply": 12, "san": "Nxe5"}        // or {"ply": 12, "uci": "f3e5"}
+```
+
+Pins that ply and **re-runs the whole game** with every pinned ply constrained,
+then rewrites `analysis.json`, `game.pgn` and `labels.json`. The SAN is parsed
+against the position reached by the corrected move list, so it is the move the
+player actually sees on the board at that point.
+
+Response is the same object as `GET …/review`, plus `"changed": [12, 13, 14]` —
+the ply indices whose SAN differs from before the correction. `400` if the move
+is illegal in that position or `ply` is out of range; `409` if the game has no
+analysis to correct.
+
+This is not cheap: the re-run costs roughly a quarter-second per capture, so a
+40-move game takes some seconds. The page should show that it is working.
+
+### `DELETE /api/games/{game_id}/corrections/{ply}`
+
+Unpins one ply and re-runs. Same response shape.
+
+### `POST /api/games/{game_id}/result`
+
+```json
+{"result": "1-0"}
+```
+
+Overrides the result the clock recorded (`1-0`, `0-1`, `1/2-1/2`, `*`). Rewrites
+`game.pgn` and `meta.json`. Response: `{"ok": true, "result": "1-0", "pgn": "…"}`.
+
+### `POST /api/games/{game_id}/verify`
+
+```json
+{"verified": true}
+```
+
+Marks the current move list as **truth**: `scripts/tune.py` then exports the game
+to `data/real/<game_id>/` with a `truth.pgn` and fits the engine's parameters
+against it alongside the synthetic corpora. A game with at least one correction
+is exported too, on the grounds that someone looked at it. Response:
+`{"ok": true, "verified": true}`.
+
+### `POST /api/games/{game_id}/lichess`
+
+Imports the current PGN to lichess and returns `{"url": "https://lichess.org/…"}`
+(`{"url": null}` if lichess refused or the network is down). The URL is cached in
+`meta.json`, so a second press returns the same game rather than importing twice.
+
+### `DELETE /api/games/{game_id}`
+
+Deletes the game directory (§2). The review page offers this behind the shared
+`modal()` confirmation — never `confirm()`.
+
+### `labels.json`
+
+```json
+{"game_id": "…", "updated_at": 1789...,
+ "corrections": [{"ply": 12, "san": "Nxe5", "uci": "f3e5", "t": 1789...}],
+ "result": "1-0", "verified": true,
+ "moves": ["e4", "e5", "Nf3", "…"]}
+```
+
+`moves` is the full corrected move list as of the last re-run — it is what
+becomes `truth.pgn`. `corrections` is the human input that produced it, kept
+separately so a re-run with new engine parameters can be re-constrained rather
+than re-labelled.

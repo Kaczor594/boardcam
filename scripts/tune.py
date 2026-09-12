@@ -14,12 +14,17 @@ wrong ply he fixes ends up here.
 
     python scripts/tune.py --dry-run          # report, write nothing
     python scripts/tune.py --out engine/params.json
+
+Manual only. There is no launchd job and there should not be one: a refit that
+nobody reads can quietly move the engine, and the numbers below are the whole
+point of running it.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -52,6 +57,68 @@ LADDERS: dict[str, list[float]] = {
 EXPENSIVE = {"theta", "cap_area"}
 
 REAL_WEIGHT = 3.0
+
+GAMES_ROOT = ROOT / "data/games"
+REAL_ROOT = ROOT / "data/real"
+
+
+# --------------------------------------------------------------------------
+# Corrected games become training truth
+# --------------------------------------------------------------------------
+
+def export_labelled(games_root: Path = GAMES_ROOT,
+                    real_root: Path = REAL_ROOT) -> list[str]:
+    """Copy every reviewed game into ``data/real/<id>/`` with a ``truth.pgn``.
+
+    A game qualifies once a human has been through it — either they corrected a
+    ply or they pressed "confirm" on the review page. Both mean the move list has
+    been read by someone, which is the only thing that makes it truth.
+
+    The frames are symlinked rather than copied: a game is a few hundred
+    megabytes of photographs and there is no reason to hold two of them.
+    """
+    from engine.pgn import pgn_from_sans
+
+    exported: list[str] = []
+    if not games_root.is_dir():
+        return exported
+    for gdir in sorted(games_root.iterdir()):
+        labels_path = gdir / "labels.json"
+        if not gdir.is_dir() or not labels_path.exists():
+            continue
+        try:
+            labels = json.loads(labels_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        moves = labels.get("moves") or []
+        if not moves or not (labels.get("verified") or labels.get("corrections")):
+            continue
+
+        meta = {}
+        try:
+            meta = json.loads((gdir / "meta.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            pass
+        out = real_root / gdir.name
+        out.mkdir(parents=True, exist_ok=True)
+        try:
+            pgn = pgn_from_sans(moves, {
+                "White": meta.get("white_name", "White"),
+                "Black": meta.get("black_name", "Black"),
+                "Result": labels.get("result") or meta.get("result") or "*",
+            })
+        except ValueError as exc:                  # a label list that is not a game
+            print(f"  ! {gdir.name}: {exc}")
+            continue
+        (out / "truth.pgn").write_text(pgn + "\n")
+        for name in ("events.jsonl", "meta.json", "calibration.json"):
+            if (gdir / name).exists():
+                shutil.copy2(gdir / name, out / name)
+        link = out / "frames"
+        if not link.exists():
+            link.symlink_to(gdir / "frames", target_is_directory=True)
+        exported.append(gdir.name)
+    return exported
 
 
 def corpora(roots: list[Path]) -> list[Path]:
@@ -120,7 +187,14 @@ def main(argv=None) -> int:
     ap.add_argument("--workers", type=int, default=9)
     ap.add_argument("--tol", type=float, default=0.05,
                     help="plies-correct a corpus may lose and still count as no regression")
+    ap.add_argument("--no-export", action="store_true",
+                    help="do not promote reviewed games into data/real first")
     a = ap.parse_args(argv)
+
+    if not a.no_export:
+        exported = export_labelled()
+        print(f"exported {len(exported)} reviewed game(s) to {REAL_ROOT}"
+              + (": " + ", ".join(exported) if exported else ""))
 
     roots = corpora(a.roots)
     if not roots:

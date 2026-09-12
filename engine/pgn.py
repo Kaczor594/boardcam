@@ -39,8 +39,14 @@ def _clk(ms: float | None) -> str | None:
 
 
 def build_pgn(result, game_dir: str | Path | None = None,
-              events: list[dict] | None = None) -> str:
-    """A complete PGN for a tracked game."""
+              events: list[dict] | None = None,
+              result_override: str | None = None) -> str:
+    """A complete PGN for a tracked game.
+
+    ``result_override`` wins over the result the clock recorded, because the
+    review page lets a player correct it — a game agreed drawn after the clock
+    was stopped at ``*`` is the common case.
+    """
     events = events if events is not None else (read_events(game_dir) if game_dir else [])
     cfg = next((e for e in events if e.get("type") == "clock.config"), {})
     stop = next((e for e in reversed(events) if e.get("type") == "clock.stop"), {})
@@ -53,7 +59,7 @@ def build_pgn(result, game_dir: str | Path | None = None,
                             if created else "????.??.??")
     game.headers["White"] = cfg.get("white_name") or "White"
     game.headers["Black"] = cfg.get("black_name") or "Black"
-    game.headers["Result"] = stop.get("result") or "*"
+    game.headers["Result"] = result_override or stop.get("result") or "*"
     if cfg.get("initial_ms"):
         game.headers["TimeControl"] = (f"{int(cfg['initial_ms']) // 1000}"
                                        f"+{int(cfg.get('increment_ms', 0)) // 1000}")
@@ -75,4 +81,22 @@ def build_pgn(result, game_dir: str | Path | None = None,
                           else chess.pgn.NAG_SPECULATIVE_MOVE)
 
     exporter = chess.pgn.StringExporter(headers=True, variations=False, comments=True)
+    return game.accept(exporter)
+
+
+def pgn_from_sans(sans: list[str], headers: dict | None = None) -> str:
+    """A minimal PGN from a move list in SAN. Used to write ``truth.pgn``.
+
+    A corrected game's truth is a move list and nothing else — no per-ply seq, no
+    flags, no clock times — so this does not go through ``build_pgn``.
+    """
+    game = chess.pgn.Game()
+    game.headers.update({"Event": "BoardCam", **(headers or {})})
+    node = game
+    board = chess.Board()
+    for san in sans:
+        move = board.parse_san(san)
+        board.push(move)
+        node = node.add_variation(move)
+    exporter = chess.pgn.StringExporter(headers=True, variations=False, comments=False)
     return game.accept(exporter)

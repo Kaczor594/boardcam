@@ -280,6 +280,9 @@ el.video.addEventListener('loadedmetadata', syncOverlay);
 
 /* ---------------- manual corner fallback ---------------- */
 
+// Board order, not screen order: the engine reads these as a1, h1, h8, a8 and
+// that single ordering is what tells it which way round the board is.
+const CORNER_NAMES = ['a1', 'h1', 'h8', 'a8'];
 const cornerState = [
   { x: 0.2, y: 0.3 }, { x: 0.8, y: 0.3 },
   { x: 0.85, y: 0.8 }, { x: 0.15, y: 0.8 },
@@ -314,6 +317,15 @@ function drawHandles() {
     g.setAttribute('stroke-width', '0.8');
     g.dataset.index = String(i);
     g.style.cursor = 'grab';
+
+    const label = document.createElementNS(NS, 'text');
+    label.setAttribute('x', String(p.x * 100));
+    label.setAttribute('y', String(p.y * 100 + 1.2));
+    label.setAttribute('text-anchor', 'middle');
+    label.setAttribute('font-size', '3');
+    label.setAttribute('fill', '#3E5A32');
+    label.style.pointerEvents = 'none';
+    label.textContent = CORNER_NAMES[i];
     g.addEventListener('pointerdown', (ev) => {
       ev.preventDefault();
       g.setPointerCapture(ev.pointerId);
@@ -333,17 +345,32 @@ function drawHandles() {
       g.addEventListener('pointerup', up);
     });
     el.cornerSvg.appendChild(g);
+    el.cornerSvg.appendChild(label);
   });
 }
 
 el.cornerCancel.addEventListener('click', () => { el.cornerPanel.hidden = true; });
-el.cornerUse.addEventListener('click', () => {
-  const corners = cornerState.map((p) => [Number(p.x.toFixed(4)), Number(p.y.toFixed(4))]);
-  // TODO(phase3): POST these to /games/{id}/calibration so the tracker can use
-  // them instead of the automatic corner detection.
-  console.log('[boardcam] manual corners', JSON.stringify(corners));
-  el.cornerPanel.hidden = true;
-  toast('Corners saved for this session.');
+el.cornerUse.addEventListener('click', async () => {
+  if (!game) {
+    toast('No game to calibrate yet.');
+    return;
+  }
+  // The panel works in normalised coordinates, and the engine reads the stored
+  // JPEG — which is the video scaled to LONG_EDGE, not the video itself.
+  const vw = el.video.videoWidth || 1;
+  const vh = el.video.videoHeight || 1;
+  const scale = Math.min(1, LONG_EDGE / Math.max(vw, vh));
+  const w = Math.round(vw * scale);
+  const h = Math.round(vh * scale);
+  const corners = cornerState.map((p) => [
+    Number((p.x * w).toFixed(1)), Number((p.y * h).toFixed(1))]);
+  try {
+    await api(`/api/games/${game.game_id}/corners`, { method: 'POST', body: { corners } });
+    el.cornerPanel.hidden = true;
+    toast('Corners saved.');
+  } catch (err) {
+    toast(`Could not save corners: ${err.message}`);
+  }
 });
 
 /* ---------------- socket ---------------- */
@@ -366,6 +393,11 @@ function onMessage(msg) {
       if (msg.ok && msg.corners) drawCalibration(msg.corners);
       if (!msg.ok) openCornerPanel();
       break;
+    case 'analysis.ready': {
+      const flagged = Array.isArray(msg.flagged) ? msg.flagged.length : (msg.flagged || 0);
+      toast(flagged ? `Game recorded — ${flagged} ply to check.` : 'Game recorded.');
+      break;
+    }
     default:
       break;   // later phases add message types; ignoring them is intentional
   }

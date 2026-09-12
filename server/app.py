@@ -21,10 +21,11 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import analysis, storage
+from . import analysis, review, storage
+from .lichess import import_pgn
 from .models import CAPTURE_REASONS, CLOCK_EVENTS, GameConfig
 from .ws import hub, now_ms
 
@@ -187,14 +188,15 @@ async def _finish_and_push(game_id: str, room: str) -> None:
         await hub.broadcast(room, {"type": "analysis.error",
                                    "error": got.get("error", "analysis failed")})
         return
-    url = None
-    if storage.read_meta(game_id).get("lichess_url") is None:
-        from .lichess import import_pgn
-        url = await asyncio.to_thread(import_pgn, got["pgn"])
+    url = storage.read_meta(game_id).get("lichess_url")
+    if url is None:
+        url = await import_pgn(got["pgn"])
         if url:
             storage.update_meta(game_id, lichess_url=url)
-    await hub.broadcast(room, {"type": "analysis.ready", "pgn": got["pgn"],
-                               "lichess_url": url, "flagged": got["flagged"]})
+    await hub.broadcast(room, {"type": "analysis.ready", "game_id": game_id,
+                               "pgn": got["pgn"], "lichess_url": url,
+                               "review_url": f"/review?game={game_id}",
+                               "plies": got["plies"], "flagged": got["flagged"]})
     analysis.forget(game_id)
 
 
@@ -255,6 +257,97 @@ async def get_pgn(game_id: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="no analysis yet")
     return FileResponse(path, media_type="application/x-chess-pgn")
+
+
+# --------------------------------------------------------------------------
+# Review and corrections (PROTOCOL.md §8)
+# --------------------------------------------------------------------------
+
+def _require(game_id: str) -> None:
+    if not storage.exists(game_id):
+        raise HTTPException(status_code=404, detail="unknown game")
+
+
+@app.get("/api/games/{game_id}/review")
+async def api_review(game_id: str):
+    _require(game_id)
+    return await asyncio.to_thread(review.payload, game_id)
+
+
+@app.get("/api/games/{game_id}/rect/{seq}")
+async def api_rect(game_id: str, seq: int, k: int = 0, prev: int | None = None,
+                   squares: str | None = None, size: int = 512):
+    """A capture rectified to a top-down board, with the changed squares drawn."""
+    _require(game_id)
+    try:
+        blob = await asyncio.to_thread(review.rect_jpeg, game_id, seq, k, prev,
+                                       squares, size)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(content=blob, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/games/{game_id}/corrections")
+async def api_correct(game_id: str, body: dict):
+    """Pin one ply to the move that was actually played and re-run the game."""
+    _require(game_id)
+    ply = body.get("ply")
+    if not isinstance(ply, int):
+        raise HTTPException(status_code=400, detail="ply must be an integer")
+    try:
+        return await asyncio.to_thread(review.apply_correction, game_id, ply,
+                                       body.get("san"), body.get("uci"))
+    except LookupError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/games/{game_id}/corrections/{ply}")
+async def api_uncorrect(game_id: str, ply: int):
+    _require(game_id)
+    try:
+        return await asyncio.to_thread(review.drop_correction, game_id, ply)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/games/{game_id}/result")
+async def api_set_result(game_id: str, body: dict):
+    _require(game_id)
+    try:
+        return await asyncio.to_thread(review.set_result, game_id, body.get("result"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/games/{game_id}/verify")
+async def api_verify(game_id: str, body: dict | None = None):
+    """Mark the move list as truth, which is what puts it in front of tune.py."""
+    _require(game_id)
+    want = True if body is None else bool(body.get("verified", True))
+    return await asyncio.to_thread(review.set_verified, game_id, want)
+
+
+@app.post("/api/games/{game_id}/lichess")
+async def api_lichess(game_id: str):
+    """Import the current PGN, once. A second press returns the same game."""
+    _require(game_id)
+    meta = storage.read_meta(game_id)
+    if meta.get("lichess_url"):
+        return {"url": meta["lichess_url"]}
+    path = storage.game_dir(game_id) / "game.pgn"
+    if not path.exists():
+        raise HTTPException(status_code=409, detail="no PGN to import yet")
+    url = await import_pgn(path.read_text())
+    if url:
+        storage.update_meta(game_id, lichess_url=url)
+    return {"url": url}
 
 
 # --------------------------------------------------------------------------

@@ -97,7 +97,7 @@ def set_manual_corners(game_id: str, corners) -> dict:
     """Adopt four corners a player dragged on the camera page."""
     import numpy as np
 
-    from engine.calibrate import calibrate_image, load_frames
+    from engine.calibrate import _camera_side, calibrate_image, load_frames
     from engine.rectify import homography
 
     state = for_game(game_id)
@@ -111,6 +111,12 @@ def set_manual_corners(game_id: str, corners) -> dict:
         cal.corners = pts
         cal.corners_image = pts
         cal.H = homography(pts, cal.size)
+        # The corners arrive in board order (a1, h1, h8, a8), so the orientation
+        # is known from them alone — the detection that just failed has no say in
+        # it, and its own guesses would be read as fact by the tracker.
+        cal.camera_side_idx, cal.camera_side = _camera_side(pts)
+        cal.square_is_light = np.array(
+            [[(f + r) % 2 == 1 for r in range(8)] for f in range(8)])
         cal.ok = True
         cal.method = "manual"
         cal.warnings = list(cal.warnings) + ["manual-corners"]
@@ -197,6 +203,6 @@ def finish(game_id: str) -> dict:
         payload["game_id"] = game_id
         pgn = build_pgn(result, gdir)
         gdir.joinpath("analysis.json").write_text(json.dumps(payload, indent=1))
-        gdir.joinpath("game.pgn").write_text(pgn + "\n")
+        gdir.joinpath("game.pgn").write_text(pgn.rstrip("\n") + "\n")
     return {"ok": True, "pgn": pgn, "flagged": len(result.flagged),
             "plies": len(result.plies)}
