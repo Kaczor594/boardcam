@@ -7,6 +7,7 @@ phone, all engine work lands in later phases.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import storage
+from . import analysis, storage
 from .models import CAPTURE_REASONS, CLOCK_EVENTS, GameConfig
 from .ws import hub, now_ms
 
@@ -146,14 +147,55 @@ async def upload_frame(game_id: str, seq: int, k: int, file: UploadFile = File(.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     meta = storage.read_meta(game_id)
+    room = meta["room"]
     await hub.send(
-        meta["room"], "clock",
+        room, "clock",
         {"type": "frame.ok", "seq": seq, "k": k, "bytes": len(blob)},
     )
+    if seq == 0:
+        asyncio.create_task(_calibrate_and_push(game_id, room))
+    else:
+        asyncio.create_task(_track_and_push(game_id, room, seq))
     return {
         "ok": True, "seq": seq, "k": k, "bytes": len(blob),
         "path": f"frames/{path.name}",
     }
+
+
+async def _calibrate_and_push(game_id: str, room: str) -> None:
+    """Find the board and tell both phones, before the first move is played."""
+    payload = await asyncio.to_thread(analysis.calibrate_start_frame, game_id)
+    message = {"type": "calibration", **payload}
+    await hub.send(room, "camera", message)
+    await hub.send(room, "clock", {"type": "calibration", "ok": payload.get("ok", False),
+                                   "score": payload.get("score"),
+                                   "warning": (payload.get("warnings") or [None])[0]})
+
+
+async def _track_and_push(game_id: str, room: str, seq: int) -> None:
+    """Keep the move list current as the game goes on."""
+    got = await asyncio.to_thread(analysis.track_frame, game_id, seq)
+    if got.get("ok"):
+        await hub.broadcast(room, {"type": "moves", "seq": seq,
+                                   "moves": got["moves"], "flagged": got["flagged"]})
+
+
+async def _finish_and_push(game_id: str, room: str) -> None:
+    """Run the tracker to the end and hand both phones the PGN."""
+    got = await asyncio.to_thread(analysis.finish, game_id)
+    if not got.get("ok"):
+        await hub.broadcast(room, {"type": "analysis.error",
+                                   "error": got.get("error", "analysis failed")})
+        return
+    url = None
+    if storage.read_meta(game_id).get("lichess_url") is None:
+        from .lichess import import_pgn
+        url = await asyncio.to_thread(import_pgn, got["pgn"])
+        if url:
+            storage.update_meta(game_id, lichess_url=url)
+    await hub.broadcast(room, {"type": "analysis.ready", "pgn": got["pgn"],
+                               "lichess_url": url, "flagged": got["flagged"]})
+    analysis.forget(game_id)
 
 
 @app.get("/games/{game_id}/frames/{seq}/{k}")
@@ -167,6 +209,42 @@ async def get_frame(game_id: str, seq: int, k: int):
     if not path.exists():
         raise HTTPException(status_code=404, detail="no such frame")
     return FileResponse(path, media_type="image/jpeg")
+
+
+@app.post("/api/games/{game_id}/corners")
+async def api_manual_corners(game_id: str, body: dict):
+    """Adopt four corners dragged on the camera page.
+
+    The detector gets the board in all but a few per cent of start frames, and
+    when it does not there is no point failing the game over it: the players can
+    drag the quad themselves and the engine carries on.
+    """
+    if not storage.exists(game_id):
+        raise HTTPException(status_code=404, detail="unknown game")
+    corners = body.get("corners")
+    if not isinstance(corners, list) or len(corners) != 4:
+        raise HTTPException(status_code=400,
+                            detail="corners must be four [x, y] pairs, board order")
+    try:
+        payload = await asyncio.to_thread(analysis.set_manual_corners, game_id, corners)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    meta = storage.read_meta(game_id)
+    await hub.broadcast(meta["room"], {"type": "calibration", **payload})
+    return payload
+
+
+@app.get("/api/games/{game_id}/analysis")
+async def api_analysis(game_id: str):
+    """The tracked move list, its per-ply confidence and its flags."""
+    if not storage.exists(game_id):
+        raise HTTPException(status_code=404, detail="unknown game")
+    saved = storage.read_json(game_id, "analysis.json")
+    if saved is not None:
+        return saved
+    state = analysis.for_game(game_id)
+    return {"game_id": game_id, "plies": [], "moves": state.moves,
+            "pending": True, "error": state.error}
 
 
 @app.get("/games/{game_id}/pgn")
@@ -251,6 +329,9 @@ async def _handle_clock_event(room: str, game_id: str, msg: dict) -> None:
 
     # The camera mirrors clock state for its own status strip.
     await hub.send(room, "camera", {"type": "clock.event", "event": stored})
+
+    if event_type in ("clock.stop", "clock.flag"):
+        asyncio.create_task(_finish_and_push(game_id, room))
 
 
 @app.websocket("/ws/{room}")

@@ -237,3 +237,119 @@ its base is on its own square.
 
 `TOWARD_CAMERA[camera_side]` gives the unit vector, in rectified pixels,
 pointing from the board toward the camera.
+
+---
+
+## Tracking (Phase 3)
+
+```python
+from engine.tracker import track_game
+result = track_game("data/synth/shallow/002-immortal-1851")
+print(result.san, result.flagged)
+```
+
+or incrementally, which is how the server runs it during a live game:
+
+```python
+tracker = Tracker(calibration, frame0_bgr, params)
+for seq, paths in frame_paths(game_dir)[1:]:
+    tracker.add_frame(seq, paths)
+result = tracker.result()
+```
+
+`Tracker.constrain(ply, move)` returns a **new** tracker with that ply pinned and
+the whole game re-run, which is what a correction on the review page does.
+
+### `TrackResult`
+
+| field | meaning |
+|---|---|
+| `moves` | the move list, `chess.Move` |
+| `plies` | one `PlyInfo` each: `san`, `uci`, `seq`, `margin`, `flags`, `candidates` |
+| `frames` | one record per capture: blob count, change mass, alignment shift, warnings |
+| `board` | the final position |
+| `calibration`, `camera` | what the geometry ended up being |
+
+`PlyInfo.seq` is the capture the ply was read from. It is **not** `index + 1`:
+a missed press puts two plies on one capture and a double press puts none on it,
+and the review page needs to show the right photograph.
+
+`PlyInfo.candidates` is what Phase 4 puts to the vision model — the top few
+moves at the frame that decided this ply, each with its log-likelihood.
+
+### Flags
+
+| flag | meaning | who resolves it |
+|---|---|---|
+| `low_margin` | the ply's margin is under `tau` nats | Phase 4 LLM, else the review page |
+| `unexplained` | even the best candidate scored below `divergence_floor` — a hand covered the board, or the position has drifted | Phase 4 asks an open question |
+| `promotion_unknown` | **every** promotion carries this | Phase 4 LLM |
+
+`margin` is the smaller of two numbers: the **local** margin (how far the chosen
+candidate beat the best candidate that disagrees, at the frame that decided it)
+and the **global** margin (log-sum-exp of the beam paths that agree about this
+ply, minus that of the paths that disagree). Either can be the binding one — a
+ply can be obvious at its own frame and still be contradicted by later frames.
+
+Promotions are flagged without exception because the engine genuinely cannot
+name the piece: a rook and a queen differ by a quarter of a square in height and
+nothing else the camera can see. A prior that promotions are queens breaks the
+tie so the *rest* of the game is tracked against a board that is right; naming
+the piece is the LLM's job.
+
+### `engine.evaluate`
+
+```
+python -m engine.evaluate data/synth/shallow --no-llm --worst 5
+```
+
+| number | meaning |
+|---|---|
+| plies correct | **index-wise** agreement with `truth.pgn` |
+| final position ok | share of games ending on the right board |
+| wrong-ply recall | of the plies it got wrong, the share it flagged |
+| flagged per game | what that recall costs — each one is an LLM call or a human glance |
+
+Plies-correct is index-wise on purpose, and it is brutal: a game that goes out of
+step at ply 16 scores zero for every ply after it, even though the tracker is
+still following the game correctly from its own board. Read it with
+final-position-correct beside it. **Wrong-ply recall is the number that decides
+whether a game is recoverable**, and a low recall is worse than a low accuracy —
+an unflagged wrong ply is one nobody will ever look at.
+
+### Measured accuracy (Phase 3, gate NOT met)
+
+Corpora generated with the seeds above; `--no-llm` throughout; beam width 30.
+
+| corpus | plies correct | final position | wrong-ply recall | flagged/game | s/frame |
+|---|---|---|---|---|---|
+| clean (30 games) | 94.6 % | 63 % | 78 % | 10.3 | 0.16 |
+| shallow (20 games) | 74.6 % | 5 % | 57 % | 14.1 | 0.27 |
+
+The gate wanted 99.5 % on clean and 98 % on shallow. Read those numbers next to
+the per-frame ones, because the difference between them is the whole story:
+
+| corpus | true move ranked 1st | in top 3 |
+|---|---|---|
+| clean | 98.1 % | 99.9 % |
+| shallow | 88.4 % | 97.8 % |
+
+**The model is not the bottleneck; the search is.** Scoring the true move
+sequence forward and comparing it with the beam's leader, the true game scores
+**60–180 nats better in total** than the game the beam returns, and never falls
+more than **4.4–6.7 nats** behind at any prefix — and is still evicted from a
+beam of width 30. Widening does not help: 30, 80 and 200 give bit-identical
+accuracy on the failing games, because the problem is that 30-odd sequences sit
+within a few nats of each other at the frame where it dies, not that the beam is
+too small to hold the right one. The field has to be made smaller by sharpening
+the per-frame likelihood.
+
+Two cautions for whoever tunes this next:
+
+* **Every parameter here was fitted on per-frame top-1 accuracy, which is not
+  what is failing.** Fit against the beam's output instead.
+* **`score_clip` and `tau` are on the emission's scale and the scale changed.**
+  When the likelihood ratio replaced the old heuristic terms, typical margins
+  went from ~3 nats to ~40. `score_clip` was left at 8 and silently flattened
+  every frame to near-uniform, which alone took shallow from 74.6 % to 39.8 %.
+  Anything measured in nats has to be re-derived when the likelihood is rescaled.
