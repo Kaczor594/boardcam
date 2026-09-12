@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Games · BoardCam</title>
+<link rel="stylesheet" href="/static/css/boardcam.css">
+<style>
+  .status {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+  .status.running  { color: var(--moss-50); }
+  .status.finished { color: var(--fg-2); }
+  .status.paused   { color: var(--terra-50); }
+  .room { font-family: var(--font-mono); letter-spacing: 0.12em; }
+  .gid  { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); }
+  td .row { gap: var(--space-2); flex-wrap: nowrap; }
+  td .row .btn { white-space: nowrap; }
+  .empty { padding: var(--space-12) 0; text-align: center; color: var(--fg-3); }
+  .table-scroll { overflow-x: auto; }
+  header.page { display: flex; align-items: baseline; gap: var(--space-4); flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="page">
+    <div>
+      <p class="eyebrow">BoardCam</p>
+      <h1 style="margin-bottom: var(--space-1);">Recorded games</h1>
+    </div>
+    <span class="spacer"></span>
+    <a href="/">Home</a>
+  </header>
+
+  <p class="muted" id="summary">Loading.</p>
+
+  <div class="table-scroll">
+    <table id="table" hidden>
+      <thead>
+        <tr>
+          <th>Started</th>
+          <th>Players</th>
+          <th>Room</th>
+          <th>Status</th>
+          <th class="num">Frames</th>
+          <th class="num">Plies</th>
+          <th>Result</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <p class="empty" id="empty" hidden>No games recorded yet. Open the camera page to start one.</p>
+</main>
+
+<script type="module">
+import { api, modal, toast } from '/static/js/ws.js';
+
+const rows = document.getElementById('rows');
+const table = document.getElementById('table');
+const empty = document.getElementById('empty');
+const summary = document.getElementById('summary');
+
+function when(ts) {
+  const d = new Date(ts * 1000);
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+
+function cell(row, text, cls) {
+  const td = document.createElement('td');
+  if (cls) td.className = cls;
+  td.textContent = text;
+  row.appendChild(td);
+  return td;
+}
+
+async function remove(game) {
+  const ok = await modal({
+    title: 'Delete this game?',
+    body: `${game.frames} frames and the event log will be removed. This cannot be undone.`,
+    row: true,
+    choices: [
+      { label: 'Cancel', value: false },
+      { label: 'Delete', value: true, cls: 'btn-danger' },
+    ],
+  });
+  if (!ok) return;
+  try {
+    await api(`/api/games/${game.game_id}`, { method: 'DELETE' });
+    toast('Game deleted.');
+    load();
+  } catch (err) {
+    toast(`Could not delete: ${err.message}`);
+  }
+}
+
+async function load() {
+  let games;
+  try {
+    games = (await api('/api/games')).games;
+  } catch (err) {
+    summary.textContent = `Could not load games: ${err.message}`;
+    return;
+  }
+
+  rows.replaceChildren();
+  const totalFrames = games.reduce((n, g) => n + g.frames, 0);
+  summary.textContent = games.length
+    ? `${games.length} game${games.length === 1 ? '' : 's'}, ${totalFrames} frames.`
+    : '';
+  table.hidden = games.length === 0;
+  empty.hidden = games.length !== 0;
+
+  for (const g of games) {
+    const tr = document.createElement('tr');
+    cell(tr, when(g.created_at));
+
+    const players = document.createElement('td');
+    players.textContent = `${g.white_name} — ${g.black_name}`;
+    const gid = document.createElement('div');
+    gid.className = 'gid';
+    gid.textContent = g.game_id;
+    players.appendChild(gid);
+    tr.appendChild(players);
+
+    cell(tr, g.room, 'room');
+    cell(tr, g.status, `status ${g.status}`);
+    cell(tr, String(g.frames), 'num');
+    cell(tr, String(g.plies), 'num');
+    cell(tr, g.result || '—');
+
+    const actions = document.createElement('td');
+    const wrap = document.createElement('div');
+    wrap.className = 'row';
+
+    const review = document.createElement('a');
+    review.className = 'btn';
+    review.href = `/review?game=${g.game_id}`;
+    review.textContent = 'Review';
+    wrap.appendChild(review);
+
+    const del = document.createElement('button');
+    del.className = 'btn btn-danger';
+    del.textContent = 'Delete';
+    del.addEventListener('click', () => remove(g));
+    wrap.appendChild(del);
+
+    actions.appendChild(wrap);
+    tr.appendChild(actions);
+    rows.appendChild(tr);
+  }
+}
+
+load();
+// A game in progress grows while this page is open.
+setInterval(load, 15000);
+</script>
+</body>
+</html>

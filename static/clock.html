@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <title>BoardCam — clock</title>
+  <link rel="stylesheet" href="/static/css/boardcam.css" />
+  <style>
+    html, body { height: 100vh; height: 100dvh; overflow: hidden; }
+
+    body.app {
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ---------- join screen ---------- */
+    #join-screen {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: var(--space-5);
+    }
+    #join-screen .card { width: 100%; max-width: 360px; }
+    #join-error {
+      color: var(--negative);
+      font-size: var(--text-sm);
+      margin-top: var(--space-3);
+    }
+
+    /* ---------- app shell ---------- */
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 0;
+    }
+
+    /* ---------- settings ---------- */
+    #settings {
+      padding: var(--space-3) var(--space-4);
+      background: var(--bg-sunken);
+      border-bottom: 1px solid var(--line-1);
+    }
+    #settings .eyebrow { margin-bottom: var(--space-2); }
+    #custom-fields {
+      display: flex;
+      gap: var(--space-3);
+      margin-top: var(--space-2);
+      max-width: 320px;
+    }
+    #custom-fields label { flex: 1; margin-bottom: 0; }
+
+    /* ---------- clock zones ---------- */
+    #clock-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .zone {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 0;
+      background: var(--stone-80);
+      color: var(--stone-30);
+      transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+      cursor: pointer;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .zone.active {
+      background: var(--paper-00);
+      color: var(--ink);
+    }
+    .zone.flagged {
+      background: var(--negative) !important;
+      color: #fff !important;
+    }
+    #zone-black { transform: rotate(180deg); }
+
+    .zone-time {
+      font-family: var(--font-mono);
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum" 1;
+      font-size: clamp(2.5rem, 16vh, 8rem);
+      line-height: 1;
+      letter-spacing: -0.01em;
+    }
+    .zone-flag-label {
+      font-family: var(--font-sans);
+      font-weight: 600;
+      font-size: var(--text-lg);
+      text-transform: uppercase;
+      letter-spacing: var(--tracking-wider);
+      margin-top: var(--space-3);
+    }
+    .zone-inner { display: flex; flex-direction: column; align-items: center; }
+
+    /* ---------- control bar ---------- */
+    #control-bar {
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-2);
+      padding: var(--space-2);
+      background: var(--bg-inverse);
+      z-index: 5;
+    }
+    /* The bar sits on the dark surface, so the default paper-coloured button
+       would shout louder than Stop, which is the action that matters here. */
+    #control-bar .btn {
+      flex: 0 0 auto;      /* never stretch to the bar's height */
+      align-self: center;
+      min-height: 36px;
+      padding: var(--space-1) var(--space-3);
+      font-size: var(--text-sm);
+      color: var(--stone-20);
+      background: transparent;
+      border-color: var(--stone-60);
+    }
+    #control-bar .btn:hover:not(:disabled) { background: rgba(248, 245, 238, 0.08); }
+    #control-bar .btn:disabled { color: var(--stone-50); border-color: var(--stone-70); }
+    #control-bar #stop-btn { color: var(--terra-30); border-color: var(--terra-50); }
+    #control-bar #stop-btn:hover:not(:disabled) { background: rgba(185, 111, 62, 0.14); }
+
+    /* ---------- analysis panel ---------- */
+    #analysis-panel {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      background: var(--bg);
+      overflow-y: auto;
+      padding: var(--space-5);
+    }
+    #analysis-pre {
+      background: var(--bg-panel);
+      border: 1px solid var(--line-1);
+      border-radius: var(--radius-md);
+      padding: var(--space-3);
+      font-family: var(--font-mono);
+      font-size: var(--text-sm);
+      white-space: pre-wrap;
+      word-break: break-word;
+      max-height: 40vh;
+      overflow-y: auto;
+    }
+
+    /* The phone lies flat between two players facing each other, so the two
+       halves stay stacked in both orientations and the far half stays rotated
+       180deg. A landscape row layout would put the players side by side, which
+       is not how anyone sits at a board. Only the type scale changes. */
+    @media (orientation: landscape) {
+      .zone-time { font-size: clamp(2rem, 26vh, 6rem); }
+      #control-bar { padding: var(--space-1) var(--space-2); }
+      #control-bar .btn { min-height: 32px; }
+    }
+  </style>
+</head>
+<body class="app">
+
+  <div id="join-screen">
+    <div class="card stack">
+      <h2>Join room</h2>
+      <p class="muted">Enter the 4-character code shown on the camera phone.</p>
+      <input id="join-code" class="code" type="text" maxlength="4" inputmode="latin" autocapitalize="characters" autocomplete="off" placeholder="XXXX" />
+      <button id="join-btn" class="btn btn-primary btn-block">Join</button>
+      <div id="join-error" hidden></div>
+    </div>
+  </div>
+
+  <div id="app" hidden>
+    <div class="status-strip">
+      <span class="status-item"><span class="dot" id="paired-dot"></span>paired</span>
+      <span class="status-item"><span class="dot" id="frame-dot"></span><span id="frame-label">frame —</span></span>
+      <span class="status-item"><span class="dot" id="cal-dot"></span>calibration</span>
+    </div>
+
+    <div id="settings">
+      <div class="eyebrow">Time control</div>
+      <div class="chip-row" id="chip-row"></div>
+      <button type="button" class="chip" id="chip-custom" aria-pressed="false">Custom</button>
+      <div id="custom-fields" hidden>
+        <label>Minutes
+          <input id="custom-minutes" type="number" min="1" step="1" value="10" />
+        </label>
+        <label>Increment (s)
+          <input id="custom-increment" type="number" min="0" step="1" value="5" />
+        </label>
+      </div>
+    </div>
+
+    <div id="clock-area">
+      <div class="zone" id="zone-black">
+        <div class="zone-inner">
+          <div class="zone-time num" id="time-black">10:00</div>
+          <div class="zone-flag-label" id="flag-black" hidden>Flag</div>
+        </div>
+      </div>
+
+      <div id="control-bar">
+        <button type="button" class="btn" id="pause-resume-btn" disabled>Pause</button>
+        <button type="button" class="btn btn-danger" id="stop-btn" disabled>Stop</button>
+        <button type="button" class="btn" id="reset-btn">Reset</button>
+      </div>
+
+      <div class="zone" id="zone-white">
+        <div class="zone-inner">
+          <div class="zone-time num" id="time-white">10:00</div>
+          <div class="zone-flag-label" id="flag-white" hidden>Flag</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="analysis-panel" hidden>
+    <h2>Analysis</h2>
+    <p class="muted" id="flagged-count"></p>
+    <pre id="analysis-pre"></pre>
+    <div class="row" style="margin-top: var(--space-4);">
+      <button type="button" class="btn" id="copy-pgn-btn">Copy PGN</button>
+      <a class="btn" id="lichess-link" href="#" target="_blank" rel="noopener" hidden>Open in lichess</a>
+    </div>
+  </div>
+
+  <script type="module" src="/static/js/clock.js"></script>
+</body>
+</html>

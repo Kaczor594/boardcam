@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BoardCam — camera</title>
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#15140F">
+<link rel="stylesheet" href="/static/css/boardcam.css">
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+
+  .status-strip { flex: 0 0 auto; }
+
+  /* ---------- setup ---------- */
+  #setup { flex: 1 1 auto; overflow-y: auto; }
+  #setup .wrap { padding-block: var(--space-6); }
+
+  .pair {
+    display: flex;
+    gap: var(--space-6);
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .qr { width: 168px; height: 168px; display: block; border: 1px solid var(--line-1); }
+  #qr-slot[hidden] { display: none !important; }
+  #join-url {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    word-break: break-all;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* ---------- stage ---------- */
+  #stage {
+    flex: 1 1 auto;
+    position: relative;
+    background: var(--stone-90);
+    min-height: 0;
+  }
+  #preview {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+    background: var(--stone-90);
+  }
+  #overlay {
+    position: absolute;
+    pointer-events: none;
+  }
+  #stage-footer {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    display: flex;
+    gap: var(--space-4);
+    align-items: center;
+    flex-wrap: wrap;
+    padding: var(--space-2) var(--space-4);
+    background: rgba(14, 13, 9, 0.72);
+    color: var(--stone-20);
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+  }
+  #stage-footer a { color: var(--moss-30); }
+  #error-line {
+    color: #D4664F;
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    padding: var(--space-2) var(--space-4);
+    background: rgba(14, 13, 9, 0.85);
+  }
+
+  /* ---------- manual corners ---------- */
+  #corner-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-4);
+    gap: var(--space-3);
+  }
+  #corner-stage { position: relative; flex: 1 1 auto; min-height: 0; }
+  #corner-still { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #corner-svg { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+</style>
+</head>
+<body class="app">
+
+<div class="status-strip">
+  <span class="status-item"><span class="dot" id="clock-dot"></span> clock</span>
+  <span class="status-item"><span class="dot" id="stream-dot"></span> stream</span>
+  <span class="status-item"><span class="dot" id="frame-dot"></span> <span id="frame-label">frame —</span></span>
+  <span class="status-item"><span class="dot" id="cal-dot"></span> calibration</span>
+</div>
+
+<section id="setup">
+  <div class="wrap">
+    <p class="eyebrow">BoardCam — camera</p>
+    <h1>Put this phone on the stand</h1>
+    <p class="prose muted">Aim it at the board from the side, as high as the stand
+    allows. The whole board plus a margin should be in frame.</p>
+
+    <div class="card stack" style="margin-bottom: var(--space-5);">
+      <p class="eyebrow">Join code for the clock phone</p>
+      <div class="pair">
+        <div>
+          <div class="room-code" id="room-code">····</div>
+          <a id="join-url" href="#"></a>
+        </div>
+        <div id="qr-slot"></div>
+      </div>
+    </div>
+
+    <button class="btn btn-primary btn-lg btn-block" id="start-btn">Start camera</button>
+    <button class="btn btn-block" id="restart-btn" hidden style="margin-top: var(--space-2);">Restart camera</button>
+    <p id="error-line" hidden style="margin-top: var(--space-3);"></p>
+  </div>
+</section>
+
+<section id="stage" hidden>
+  <video id="preview" playsinline muted autoplay></video>
+  <svg id="overlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"></svg>
+  <div id="stage-footer">
+    <span id="upload-label">0 up</span>
+    <span class="spacer"></span>
+    <span id="game-id"></span>
+    <a href="/games">games</a>
+  </div>
+</section>
+
+<div id="corner-panel" hidden>
+  <h2>Mark the board corners</h2>
+  <p class="muted" style="margin:0;">Drag each handle onto a corner of the board,
+  clockwise from the far left.</p>
+  <div id="corner-stage">
+    <img id="corner-still" alt="Still frame from the camera">
+    <svg id="corner-svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
+  </div>
+  <div class="row">
+    <button class="btn" id="corner-cancel">Cancel</button>
+    <button class="btn btn-primary" id="corner-use">Use these corners</button>
+  </div>
+</div>
+
+<script type="module" src="/static/js/camera.js"></script>
+</body>
+</html>

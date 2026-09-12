@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>BoardCam</title>
+<link rel="manifest" href="/static/manifest.webmanifest">
+<meta name="theme-color" content="#15140F">
+<link rel="stylesheet" href="/static/css/boardcam.css">
+<style>
+  .role-grid { display: grid; gap: var(--space-4); grid-template-columns: 1fr; }
+  @media (min-width: 560px) { .role-grid { grid-template-columns: 1fr 1fr; } }
+  .role {
+    display: block;
+    text-decoration: none;
+    color: inherit;
+    background: var(--bg-raised);
+    border: 1px solid var(--line-1);
+    border-radius: var(--radius-md);
+    padding: var(--space-6);
+    box-shadow: var(--shadow-1);
+    transition: border-color var(--dur-fast) var(--ease-out),
+                box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .role:hover { border-color: var(--moss-30); box-shadow: var(--shadow-2); }
+  .role h2 { margin-bottom: var(--space-1); }
+  .role p { margin: 0; color: var(--fg-2); font-size: var(--text-sm); }
+  .order { font-family: var(--font-mono); font-size: var(--text-xs);
+           letter-spacing: var(--tracking-wider); text-transform: uppercase;
+           color: var(--fg-3); margin-bottom: var(--space-2); }
+  footer { margin-top: var(--space-12); padding-top: var(--space-5);
+           border-top: 1px solid var(--line-1); font-size: var(--text-sm); color: var(--fg-3); }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <p class="eyebrow">BoardCam</p>
+  <h1>Record the game, not the moves</h1>
+  <p class="prose muted">One phone runs the clock. A second phone on the stand photographs
+  the board on every press. The game comes back as a PGN.</p>
+
+  <div class="role-grid" style="margin-top: var(--space-8);">
+    <a class="role" href="/camera">
+      <p class="order">Open first</p>
+      <h2>Camera</h2>
+      <p>The phone on the stand. Creates the game and shows the code the clock phone joins with.</p>
+    </a>
+    <a class="role" href="/clock">
+      <p class="order">Open second</p>
+      <h2>Clock</h2>
+      <p>The phone between the players. Runs the clock and triggers every photograph.</p>
+    </a>
+  </div>
+
+  <footer>
+    <a href="/games">Recorded games</a> · Setup notes are in <span class="num">docs/SETUP.md</span>
+  </footer>
+</main>
+</body>
+</html>

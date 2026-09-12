@@ -1,0 +1,10 @@
+{
+  "name": "BoardCam",
+  "short_name": "BoardCam",
+  "description": "Clock-triggered over-the-board chess recorder",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F8F5EE",
+  "theme_color": "#15140F"
+}

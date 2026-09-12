@@ -1,0 +1,354 @@
+/* BoardCam — kaczor-design tokens + the shared shell.
+   Tokens are inlined (not @imported) so a phone on a flaky tunnel paints
+   correctly from one request. Only the subset the app uses is kept. */
+
+@import url('https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Archivo:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --paper-00: #FDFCF8;
+  --paper-05: #F8F5EE;
+  --paper-10: #F2EEE4;
+  --paper-20: #E8E2D2;
+  --paper-30: #D8CFB8;
+
+  --stone-10: #E6E4DC;
+  --stone-20: #CDCAC0;
+  --stone-30: #A8A59A;
+  --stone-40: #807D72;
+  --stone-50: #5E5C52;
+  --stone-60: #454339;
+  --stone-70: #322F27;
+  --stone-80: #211F1A;
+  --stone-90: #15140F;
+  --ink:      #0E0D09;
+
+  --moss-10: #E6EBDD;
+  --moss-20: #C4D0AE;
+  --moss-30: #8FA474;
+  --moss-40: #5F784A;
+  --moss-50: #3E5A32;
+  --moss-60: #2E4426;
+  --moss-70: #1F301A;
+
+  --terra-10: #F4E4D7;
+  --terra-30: #D29972;
+  --terra-40: #B96F3E;
+  --terra-50: #92552D;
+
+  --brand:       var(--moss-50);
+  --brand-hover: var(--moss-60);
+  --brand-soft:  var(--moss-10);
+  --brand-ring:  rgba(62, 90, 50, 0.28);
+  --brand-on:    var(--paper-00);
+
+  --positive: var(--moss-40);
+  --negative: #A63826;
+  --warning:  var(--terra-50);
+
+  --bg:        var(--paper-05);
+  --bg-raised: var(--paper-00);
+  --bg-sunken: var(--paper-10);
+  --bg-panel:  var(--paper-10);
+  --bg-inverse: var(--stone-90);
+
+  --fg-1: var(--stone-90);
+  --fg-2: var(--stone-60);
+  --fg-3: var(--stone-50);
+  --fg-4: var(--stone-40);
+  --fg-on-inverse: var(--paper-05);
+
+  --line-1: var(--paper-30);
+  --line-2: var(--stone-20);
+  --line-strong: var(--stone-40);
+
+  --shadow-1: 0 1px 0 rgba(62, 56, 40, 0.04), 0 1px 2px rgba(62, 56, 40, 0.04);
+  --shadow-2: 0 1px 0 rgba(62, 56, 40, 0.03), 0 6px 14px -6px rgba(62, 56, 40, 0.10);
+  --shadow-3: 0 2px 0 rgba(62, 56, 40, 0.03), 0 16px 32px -10px rgba(62, 56, 40, 0.14);
+  --ring: 0 0 0 3px var(--brand-ring);
+
+  --radius-xs: 1px;
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px;
+  --space-12: 48px; --space-16: 64px;
+
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --dur-fast: 140ms;
+  --dur-med:  240ms;
+
+  --font-display: 'Spectral', 'Tiempos Headline', Georgia, serif;
+  --font-prose:   'Spectral', Georgia, serif;
+  --font-sans:    'Archivo', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:    'IBM Plex Mono', 'SF Mono', Menlo, monospace;
+
+  --text-xs: 11px; --text-sm: 13px; --text-base: 15px; --text-md: 17px;
+  --text-lg: 20px; --text-xl: 26px; --text-2xl: 34px; --text-3xl: 48px;
+
+  --leading-tight: 1.05;
+  --leading-snug:  1.2;
+  --leading-body:  1.58;
+
+  --tracking-tighter: -0.018em;
+  --tracking-tight:   -0.012em;
+  --tracking-body:     0;
+  --tracking-wider:    0.14em;
+}
+
+/* ---------- reset ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+/* Phones only. Everything here is tapped, never selected or dragged. */
+body.app {
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-snug);
+  margin: 0 0 var(--space-3);
+}
+h1 { font-size: var(--text-2xl); letter-spacing: var(--tracking-tighter); }
+h2 { font-size: var(--text-xl); }
+h3 { font-size: var(--text-md); font-family: var(--font-sans); font-weight: 600; }
+
+p { margin: 0 0 var(--space-4); }
+a { color: var(--brand); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a:hover { color: var(--brand-hover); }
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+
+.muted { color: var(--fg-3); }
+.prose { font-family: var(--font-prose); font-size: var(--text-md); }
+
+/* ---------- layout ---------- */
+.wrap {
+  max-width: 760px;
+  margin: 0 auto;
+  padding-block: var(--space-10);
+  padding-inline: var(--space-5);
+}
+
+.card {
+  background: var(--bg-raised);
+  border: 1px solid var(--line-1);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-1);
+}
+
+/* ---------- buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: var(--space-3) var(--space-5);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: 500;
+  color: var(--fg-1);
+  background: var(--bg-raised);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+}
+.btn:hover { background: var(--bg-sunken); }
+.btn:focus-visible { outline: none; box-shadow: var(--ring); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-on);
+}
+.btn-primary:hover { background: var(--brand-hover); border-color: var(--brand-hover); }
+
+.btn-danger { color: var(--negative); border-color: var(--negative); background: transparent; }
+.btn-danger:hover { background: rgba(166, 56, 38, 0.08); }
+
+.btn-lg { min-height: 56px; font-size: var(--text-md); }
+.btn-block { width: 100%; }
+
+/* ---------- fields ---------- */
+label { display: block; font-size: var(--text-sm); color: var(--fg-2); margin-bottom: var(--space-1); }
+
+input[type="text"], input[type="number"], select {
+  width: 100%;
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  color: var(--fg-1);
+  background: var(--bg-raised);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-md);
+}
+input:focus, select:focus { outline: none; box-shadow: var(--ring); border-color: var(--brand); }
+
+input.code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+/* ---------- status strip ---------- */
+/* One line of dots at the top of both phone pages. Honest state only:
+   a dot is `ok` when the server said so, never optimistically. */
+.status-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-4);
+  background: var(--bg-inverse);
+  color: var(--fg-on-inverse);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+}
+
+.status-item { display: inline-flex; align-items: center; gap: var(--space-2); white-space: nowrap; }
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--stone-50);
+  flex: 0 0 auto;
+  transition: background var(--dur-med) var(--ease-out);
+}
+.dot.ok    { background: var(--moss-30); }
+.dot.warn  { background: var(--terra-30); }
+.dot.error { background: #D4664F; }
+.dot.pulse { animation: dot-pulse 1s var(--ease-out); }
+
+@keyframes dot-pulse {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.9); }
+  100% { transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* ---------- room code ---------- */
+.room-code {
+  font-family: var(--font-mono);
+  font-size: var(--text-3xl);
+  font-weight: 600;
+  letter-spacing: 0.28em;
+  text-indent: 0.28em;
+  color: var(--fg-1);
+}
+
+/* ---------- modal ---------- */
+/* Never window.confirm(): it blocks the event loop, kills the camera stream
+   on iOS and cannot be styled. */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: rgba(14, 13, 9, 0.62);
+  backdrop-filter: blur(2px);
+}
+.modal-backdrop[hidden] { display: none !important; }
+
+.modal {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg-raised);
+  border: 1px solid var(--line-1);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+  padding: var(--space-6);
+}
+.modal h2 { margin-bottom: var(--space-2); }
+.modal .modal-body { color: var(--fg-2); font-size: var(--text-base); margin-bottom: var(--space-5); }
+.modal .modal-actions { display: flex; flex-direction: column; gap: var(--space-2); }
+.modal .modal-actions.row { flex-direction: row; }
+.modal .modal-actions.row .btn { flex: 1; }
+
+/* ---------- misc ---------- */
+.stack { display: flex; flex-direction: column; gap: var(--space-4); }
+.row   { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: center; }
+.spacer { flex: 1 1 auto; }
+.hidden, [hidden] { display: none !important; }
+
+.chip-row { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.chip {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--fg-2);
+  cursor: pointer;
+  min-height: 40px;
+}
+.chip[aria-pressed="true"] {
+  background: var(--brand-soft);
+  border-color: var(--moss-30);
+  color: var(--moss-60);
+  font-weight: 600;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-6);
+  transform: translateX(-50%);
+  z-index: 60;
+  background: var(--bg-inverse);
+  color: var(--fg-on-inverse);
+  font-size: var(--text-sm);
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-3);
+  max-width: calc(100vw - var(--space-8));
+}
+
+table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+th, td { text-align: left; padding: var(--space-3) var(--space-3); border-bottom: 1px solid var(--line-1); }
+th { font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: var(--tracking-wider);
+     text-transform: uppercase; color: var(--fg-3); font-weight: 500; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
