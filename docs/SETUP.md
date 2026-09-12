@@ -21,10 +21,10 @@ a fresh random one.
 2. Sign in at <https://dashboard.ngrok.com>, copy the authtoken, run
    `ngrok config add-authtoken <token>`.
 3. Go to **Domains** and reserve the free static domain, e.g.
-   `boardcam-ik.ngrok-free.app`.
+   `your-name.ngrok-free.app`.
 4. Add it to `~/.zprofile`:
    ```bash
-   export BOARDCAM_DOMAIN=boardcam-ik.ngrok-free.app
+   export BOARDCAM_DOMAIN=your-name.ngrok-free.app
    ```
 
 ### The interstitial
