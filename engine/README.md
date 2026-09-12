@@ -353,3 +353,127 @@ Two cautions for whoever tunes this next:
   went from ~3 nats to ~40. `score_clip` was left at 8 and silently flattened
   every frame to near-uniform, which alone took shallow from 74.6 % to 39.8 %.
   Anything measured in nats has to be re-derived when the likelihood is rescaled.
+
+---
+
+## Vision-LLM fallback (Phase 4)
+
+```python
+from engine.vision_llm import resolve_ply, Option
+
+result = resolve_ply(before_paths, after_paths, rect_before, rect_after,
+                     candidates, side_to_move, calib)
+# {"san": "Nf3" | ... | "none_of_these", "confidence": 0.0-1.0,
+#  "model": "claude-sonnet-5" | "claude-opus-5", "cost": dollars}
+```
+
+`before_paths`/`after_paths` are the raw burst frames either side of the ply
+(paths or ndarrays — the first is used, burst selection already happened
+upstream). `rect_before`/`rect_after` are the same two captures already run
+through `engine.rectify.rectify`. `candidates` is a list of `Option(label,
+moves)` (or an equivalent `{"label": ..., "moves": (...)}` dict) — `moves` is
+0, 1 or 2 UCI strings, and `label` must be unique within the call; it becomes
+both the enum value and the display string. The call is **forced tool use**
+(`tool_choice: {"type": "tool", "name": "choose_move"}`) against an enum of
+every label plus `"none_of_these"`, so the answer is always one of the offered
+candidates or an explicit "none of them" — never free text.
+
+**Images sent, in order:** the raw camera view before, the raw camera view
+after (both cropped to the board's bounding box plus a 15 % margin — this is
+what puts hands and the captured-piece pile in frame), then the same two
+moments rectified to a top-down view with every candidate's touched squares
+outlined in red.
+
+**Escalation.** The first call is `claude-sonnet-5`. If it answers
+`none_of_these` or its confidence is below `0.7`, a second call goes to
+`claude-opus-5` with the identical prompt and images; the returned `cost` is
+the sum of both. A model tier is never asked twice.
+
+### Caching and the call budget
+
+```python
+from engine.vision_llm import LLMResolver
+
+resolver = LLMResolver(game_dir)           # <game_dir>/llm_cache.json
+answer = resolver.resolve(str(seq), before_paths=..., after_paths=...,
+                          rect_before=..., rect_after=..., candidates=...,
+                          side_to_move=..., calib=...)
+```
+
+`LLMResolver` is what the tracker actually calls. It caches by whatever key
+the caller passes — the tracker uses the frame's capture `seq` — so replaying
+a game (a correction re-run via `Tracker.constrain`) costs nothing for frames
+already resolved. `max_calls` (default 10) is a hard ceiling on *new* calls per
+game; once spent, `resolve()` returns `None` and the ply stays flagged rather
+than the game running up an unbounded bill. The cache is a flat JSON file, one
+entry per key, read at construction and rewritten after every new call.
+
+### Beam integration (`engine/tracker.py`)
+
+Once per frame — not once per beam path — the tracker checks the **current
+leader's** own candidate scores (`self.beam[0]`, the same board every
+downstream ply is read against). If the top two candidates are closer than
+`tau` or the top score is below `divergence_floor`, and `params["use_llm"]` is
+set, it builds a label for each of the top 6 candidates (12 when
+`unexplained`, since pairs are already in `scored` by then) from
+`board.san(...)`, asks `LLMResolver`, and — if the answer names one of them —
+adds `log(confidence)` as a bonus to every path in the beam whose candidate at
+that frame shares the exact same move signature (by UCI, not by path
+identity, since most of the beam agrees about the current board anyway). A
+`none_of_these` or budget-exhausted answer changes nothing; the ply stays
+flagged for the review page. Cost, model and confidence are logged into that
+frame's record (`frame_rec["llm_cost"]` etc.), which is what
+`engine.evaluate`'s `llm_cost_per_game` column reads — no change was needed
+there.
+
+`params["use_llm"]` is off unless a caller sets it explicitly; `engine.evaluate`
+sets it from `--no-llm`, and the live server (`server/analysis.py`) does not
+set it, so a game in progress never triggers a paid call mid-play — only
+`engine.evaluate` and any future opt-in wiring do.
+
+### Measured accuracy (Phase 4, gate **NOT MET**, by design of the test)
+
+- `pytest tests/test_vision.py -q` (mocked): **10/10 pass** — schema, forced
+  tool choice, both escalation triggers, cost summation, confidence clamping,
+  cache reuse across `LLMResolver` instances, the call cap, and recovery from a
+  corrupt cache file.
+- `pytest tests/test_vision.py -q -m live`: 3/3 calls returned a valid,
+  schema-conforming answer (one correctly escalated to Opus on low
+  confidence); **1/3 matched truth**, short of the gate's 2/3.
+- `engine.evaluate data/synth/shallow` / `data/synth/hard` (LLM on): **not
+  run.** Diagnosis below explains why running the full ~$10–25 corpus would
+  not have told us anything the smoke test didn't, and Isaac chose to skip it
+  (2026-09-12) — this mirrors the Phase 3 gate override.
+
+**Why the smoke test fell short, and why it isn't a plumbing bug.** The three
+flagged plies it was asked about: a bishop-or-knight-to-h6 ambiguity, an
+underpromotion (rook/knight/queen/bishop), and a rook move in a cluttered,
+hand-occluded midgame frame.
+
+1. `synth/render.py` draws every piece as the same cone/cylinder silhouette,
+   distinguished only by height (Notes §A: `P<B<N<R<Q<K`, bishop ≈ 1.2×pawn).
+   A bishop and a knight at adjacent height classes are visually
+   indistinguishable in the rendered image — there is no mitre, no horse head,
+   nothing but a slightly taller cone. The model answered a real candidate
+   (`h6`, a pawn push) rather than either piece option, i.e. it could not tell
+   *any* piece moved there versus a pawn already being there. This is not
+   fixable by prompting; it needs the renderer to draw visually distinct
+   piece heads, which is out of scope for Phase 4.
+2. The rook-move frame had hands from both players resting near the board on
+   a busy midgame position — exactly the scene noise `hard` is built to
+   contain (Notes §E). The model answered "no move happened". A human glancing
+   at the same crop would plausibly make the same call.
+3. The promotion question (genuinely unresolvable by the engine itself, hence
+   always flagged) was answered *correctly* (`b1=N`) after escalating to Opus
+   on low confidence — the one case in this smoke test the vision fallback is
+   squarely meant for, and the one it got right.
+
+**The implication for Phase 6:** the synthetic corpus cannot validate the
+piece-*identity* half of what this module is for, because the renderer
+deliberately keeps pieces abstract (that abstraction is exactly what makes the
+tracker's forward model work — see Notes §C — and reworking it is a Phase 2/3
+change, not a Phase 4 one). Real photographs have real piece shapes. Phase 6
+is therefore the first point this module's actual value can be measured, and
+its cost (`$0.007`/sonnet call, `$0.024` on an escalation to Opus, from the
+smoke test's real usage) is in line with the gate's `≤ $0.15`/game budget even
+if every flagged ply in a real game escalated.

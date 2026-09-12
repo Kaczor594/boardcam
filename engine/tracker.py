@@ -24,6 +24,7 @@ import numpy as np
 
 from . import camera as cammod
 from . import emission as em
+from . import rectify as rectmod
 from .calibrate import Calibration
 from .features import FeatureExtractor, load_params
 
@@ -130,6 +131,8 @@ class Tracker:
         self.frames: list[dict] = []
         self._inputs: list[tuple[int, list]] = []
         self._first = True
+        self._llm = None
+        self._llm_tried = False
 
     # -- public API -------------------------------------------------------
 
@@ -258,6 +261,89 @@ class Tracker:
                 return False
         return True
 
+    # -- vision-LLM fallback (Phase 4) -------------------------------------
+
+    def _llm_resolver(self):
+        """The game's ``LLMResolver``, built lazily once a frame path is known."""
+        if not self.params.get("use_llm"):
+            return None
+        if self._llm is None and not self._llm_tried and self._inputs:
+            from . import vision_llm
+            game_dir = Path(self._inputs[-1][1][0]).parent.parent
+            self._llm = vision_llm.LLMResolver(game_dir)
+            self._llm_tried = True
+        return self._llm
+
+    def _consult_llm(self, seq: int, scored, board: chess.Board, unexplained: bool):
+        """Ask the vision model about the frame that is currently deciding a ply.
+
+        Builds the candidate list from ``scored`` (already includes pairs when
+        the frame triggered them), sends the two captures either side of it, and
+        returns the move signature to reward — or ``None`` if the budget is
+        spent, the call failed, or nothing in ``scored`` survives to a label.
+        """
+        from . import vision_llm
+
+        top_n = scored[: (12 if unexplained else 6)]
+        seen: set[str] = set()
+        opts: list[dict] = []
+        label_to_moves: dict[str, tuple[str, ...]] = {}
+        for cand, _ in top_n:
+            if cand.kind == "null":
+                label = "no move happened"
+            else:
+                try:
+                    sans = []
+                    b = board.copy(stack=False)
+                    for m in cand.moves:
+                        sans.append(b.san(m))
+                        b.push(m)
+                    label = " then ".join(sans)
+                except (AssertionError, ValueError):
+                    continue
+            if label in seen:
+                continue
+            seen.add(label)
+            uci = tuple(m.uci() for m in cand.moves)
+            label_to_moves[label] = uci
+            opts.append({"label": label, "moves": uci})
+        if len(opts) < 2:
+            return None
+
+        if len(self._inputs) < 2:
+            before_paths: list = [self.frame0]
+        else:
+            before_paths = self._inputs[-2][1]
+        after_paths = self._inputs[-1][1]
+
+        try:
+            rect_before = rectmod.rectify(self._frame_bgr(before_paths[0]), self.calib)
+            rect_after = rectmod.rectify(self._frame_bgr(after_paths[0]), self.calib)
+        except Exception:
+            return None
+
+        resolver = self._llm
+        result = resolver.resolve(
+            str(seq), before_paths=before_paths, after_paths=after_paths,
+            rect_before=rect_before, rect_after=rect_after, candidates=opts,
+            side_to_move=("white" if board.turn == chess.WHITE else "black"),
+            calib=self.calib,
+        )
+        if result is None:
+            return None
+        return {"san": result["san"], "confidence": result["confidence"],
+                "cost": result.get("cost", 0.0), "model": result.get("model"),
+                "chosen_moves": label_to_moves.get(result["san"])}
+
+    @staticmethod
+    def _frame_bgr(source) -> np.ndarray:
+        if isinstance(source, np.ndarray):
+            return source
+        img = cv2.imread(str(source), cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError(f"cannot read image: {source}")
+        return img
+
     def _step(self, feats) -> None:
         e = self._emission(feats)
         width = int(self.params["beam_width"])
@@ -275,6 +361,30 @@ class Tracker:
         # fill every slot, and every rival reading of an earlier ply is evicted
         # by siblings rather than by evidence.
         children = int(self.params.get("children_per_path", 5))
+
+        # A flagged frame gets one look from a vision model — at the current
+        # leader's board, not every path in the beam, since that is what
+        # decides the ply everyone downstream sees. The answer is a bonus on
+        # whichever candidate shares its exact move signature, wherever that
+        # candidate turns up across the beam.
+        llm_bonus: dict[tuple[str, ...], float] = {}
+        if self._llm_resolver() is not None:
+            lead_scored, _ = self._score_board(e, self.beam[0])
+            lead_top = lead_scored[0][1]
+            lead_runner = lead_scored[1][1] if len(lead_scored) > 1 else -INF
+            unexplained_lead = lead_top < self.params["divergence_floor"]
+            if (lead_top - lead_runner) < self.params["tau"] or unexplained_lead:
+                llm_result = self._consult_llm(feats.seq, lead_scored, self.beam[0].board,
+                                               unexplained_lead)
+                if llm_result is not None:
+                    frame_rec["llm_cost"] = llm_result["cost"]
+                    frame_rec["llm_model"] = llm_result["model"]
+                    frame_rec["llm_confidence"] = llm_result["confidence"]
+                    frame_rec["llm_choice"] = llm_result["san"]
+                    if llm_result["chosen_moves"] is not None:
+                        llm_bonus[llm_result["chosen_moves"]] = math.log(
+                            max(llm_result["confidence"], 1e-3))
+
         for path in self.beam:
             scored, obs = self._score_board(e, path)
             if best_obs is None:
@@ -288,6 +398,8 @@ class Tracker:
                 # from the beam, and nothing later can put it back.
                 if clip > 0.0:
                     sc = max(sc, local_top - clip)
+                if llm_bonus:
+                    sc += llm_bonus.get(tuple(m.uci() for m in cand.moves), 0.0)
                 if not self._allowed(path, cand):
                     continue
                 b = path.board.copy(stack=False)
