@@ -86,8 +86,15 @@ This is the part that decides whether the engine works.
   the first real game the board filled about 15 % of the frame and every
   candidate the detector produced was on the floorboards. Cropped to the board,
   the same photograph nearly passed.
-- Landscape beats portrait for this: it puts the board's long axis along the
-  frame's long axis and leaves less room for floor.
+- Portrait and landscape both work; pick whichever makes the board biggest.
+  Landscape usually wins from the side, since the board is wider than it is
+  deep in the picture. The detector now looks for the checkered middle of the
+  board rather than straight lines, so floorboards no longer fool it, but
+  pixels on the board still decide how well pieces can be told apart.
+- The camera page warns before the game if **part of the picture is black**
+  (something on the stand in front of the lens — two of the three evening
+  field-test games lost the lower 45 % of the frame to it) or if **the board is
+  small** (squares under 50 px).
 - Hands at rest, the players and captured pieces are only a problem if they sit
   *on* the board area.
 - **Put the clock phone and the captured pieces outside the board rectangle.**
@@ -117,6 +124,12 @@ what tells the engine which way round the board is.
 
 Corners placed by hand are final — the pre-start re-detection will not overwrite
 them, and the panel will not reappear.
+
+Until the board is found the panel cannot be dismissed, only retaken ("Retake
+start photo", before the first press) or answered. A game played without a
+found board is **not analysed** — the clock phone says so before the first
+move. If one is played anyway, mark the corners afterwards on the camera page
+and the game is analysed then.
 
 ## 7. After the game
 

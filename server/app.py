@@ -152,6 +152,8 @@ async def upload_frame(game_id: str, seq: int, k: int, file: UploadFile = File(.
         if seq == 0 or seq > storage.max_seq(game_id):
             raise HTTPException(status_code=409,
                                 detail="this game is finished; start a new one")
+    if seq > 0:
+        blob = await asyncio.to_thread(analysis.match_start_orientation, game_id, blob)
     try:
         path = storage.write_frame(game_id, seq, k, blob)
     except ValueError as exc:
@@ -179,6 +181,7 @@ async def _calibrate_and_push(game_id: str, room: str) -> None:
     message = {"type": "calibration", **payload}
     await hub.send(room, "camera", message)
     await hub.send(room, "clock", {"type": "calibration", "ok": payload.get("ok", False),
+                                   "method": payload.get("method"),
                                    "score": payload.get("score"),
                                    "warning": (payload.get("warnings") or [None])[0]})
 
@@ -196,7 +199,8 @@ async def _finish_and_push(game_id: str, room: str) -> None:
     got = await asyncio.to_thread(analysis.finish, game_id)
     if not got.get("ok"):
         await hub.broadcast(room, {"type": "analysis.error",
-                                   "error": got.get("error", "analysis failed")})
+                                   "error": got.get("error", "analysis failed"),
+                                   "board_not_found": bool(got.get("board_not_found"))})
         return
     url = storage.read_meta(game_id).get("lichess_url")
     if url is None:
@@ -243,6 +247,10 @@ async def api_manual_corners(game_id: str, body: dict):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     meta = storage.read_meta(game_id)
     await hub.broadcast(meta["room"], {"type": "calibration", **payload})
+    # A game that ended before anyone placed the corners was refused analysis;
+    # the corners are what it was waiting for.
+    if meta.get("status") == "finished":
+        asyncio.create_task(_finish_and_push(game_id, meta["room"]))
     return payload
 
 

@@ -13,6 +13,7 @@ with.
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -129,16 +130,28 @@ class Tracker:
         board = start_board.copy() if start_board else chess.Board()
         self.beam: list[_Path] = [_Path(board, (), 0.0, ())]
         self.frames: list[dict] = []
-        self._inputs: list[tuple[int, list]] = []
+        self._inputs: list[tuple[int, list, str | None]] = []
         self._first = True
         self._llm = None
         self._llm_tried = False
+        self._sides: dict[int, str] = {}
 
     # -- public API -------------------------------------------------------
 
-    def add_frame(self, seq: int, paths) -> None:
+    def add_frame(self, seq: int, paths, side: str | None = None) -> None:
+        """Feed one capture. ``side`` is who pressed the clock for it, if known.
+
+        A press is the presser saying they have just moved, so after it the
+        other side is to move. That holds even when a capture is missed (two
+        plies land in the next frame, whose presser moved last) or doubled (a
+        frame with no ply, same presser) — so it is evidence about how many
+        plies a frame holds that the photographs cannot give, and exactly what
+        a low-contrast frame read as "no move" gets wrong.
+        """
         paths = [str(p) for p in paths]
-        self._inputs.append((seq, paths))
+        self._inputs.append((seq, paths, side))
+        if side in ("white", "black"):
+            self._sides[seq] = side
         if self._first and self.orient_check:
             self._resolve_orientation(seq, paths)
             self._first = False
@@ -163,8 +176,8 @@ class Tracker:
         cons[ply] = move
         t = Tracker(self.calib, self.frame0, self.params, constraints=cons,
                     orient_check=False)
-        for seq, paths in self._inputs:
-            t.add_frame(seq, paths)
+        for seq, paths, side in self._inputs:
+            t.add_frame(seq, paths, side)
         return t
 
     # -- orientation ------------------------------------------------------
@@ -361,6 +374,9 @@ class Tracker:
         # fill every slot, and every rival reading of an earlier ply is evicted
         # by siblings rather than by evidence.
         children = int(self.params.get("children_per_path", 5))
+        side = self._sides.get(feats.seq)
+        to_move_after = None if side is None else (chess.BLACK if side == "white" else chess.WHITE)
+        side_penalty = float(self.params.get("press_side_penalty", 0.0))
 
         # A flagged frame gets one look from a vision model — at the current
         # leader's board, not every path in the beam, since that is what
@@ -411,6 +427,8 @@ class Tracker:
                 b = path.board.copy(stack=False)
                 for m in cand.moves:
                     b.push(m)
+                if to_move_after is not None and b.turn != to_move_after:
+                    sc -= side_penalty
                 moves = path.moves + cand.moves
                 dec = {"seq": feats.seq, "kind": cand.kind,
                        "n": cand.n_plies, "score": sc, "local_best": local_top,
@@ -544,6 +562,22 @@ def frame_paths(game_dir: Path) -> list[tuple[int, list[Path]]]:
     return [(s, sorted(by_seq[s])) for s in sorted(by_seq)]
 
 
+def press_sides(game_dir: str | Path) -> dict[int, str]:
+    """Who pressed the clock for each capture, from the game's event log."""
+    path = Path(game_dir) / "events.jsonl"
+    out: dict[int, str] = {}
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if ev.get("type") in ("clock.start", "clock.press") and isinstance(ev.get("seq"), int):
+            out[ev["seq"]] = ev.get("side")
+    return out
+
+
 def track_game(game_dir: str | Path, params: dict | None = None,
                constraints: dict[int, chess.Move] | None = None) -> TrackResult:
     from .calibrate import calibrate
@@ -554,6 +588,7 @@ def track_game(game_dir: str | Path, params: dict | None = None,
     calib = calibrate(seqs[0][1])
     frame0 = cv2.imread(str(seqs[0][1][0]), cv2.IMREAD_COLOR)
     t = Tracker(calib, frame0, params, constraints=constraints)
+    sides = press_sides(game_dir)
     for seq, paths in seqs[1:]:
-        t.add_frame(seq, paths)
+        t.add_frame(seq, paths, sides.get(seq))
     return t.result()

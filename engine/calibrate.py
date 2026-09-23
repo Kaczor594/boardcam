@@ -802,6 +802,57 @@ def _detect(bgr: np.ndarray, mask: np.ndarray | None = None,
     return out
 
 
+CHECKER_SCALES = (1.0, 0.75, 0.5)
+CHECKER_MAX_RESID = 0.06    # projective fit RMS, in squares, to trust a detection
+
+
+def _checker_quads(bgr: np.ndarray) -> list[np.ndarray]:
+    """Candidate quads from the empty middle of the board, as a partial checkerboard.
+
+    At the start position ranks 3-6 are a clean 8x4 checkerboard, which gives
+    OpenCV's checkerboard detector 7 x 3 interior corners to find even though
+    the full 7 x 7 grid is hidden under pieces. It looks for alternating
+    squares rather than straight lines, so the wood grain that defeats the line
+    detector does not fool it. The corners pin the seven lines across the board
+    exactly; which ranks the short direction covers is left open, so every
+    offset is offered and ``_evaluate`` and ``_climb`` choose.
+
+    The detector occasionally returns a bent grid threaded through the pieces;
+    a detection that a single homography cannot explain is discarded, which is
+    also why several scales are tried.
+    """
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    base = min(WORK_EDGE / max(gray.shape), 1.0)
+    unit = np.array([[[0.0, 0.0], [8.0, 0.0], [8.0, 8.0], [0.0, 8.0]]])
+    out: list[np.ndarray] = []
+    for s in CHECKER_SCALES:
+        scale = base * s
+        g = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA) \
+            if scale < 1.0 else gray
+        for n in (7, 6, 5, 4, 3):
+            found, pts = cv2.findChessboardCornersSB(
+                g, (7, n), flags=cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY)
+            if not found:
+                continue
+            img = pts.reshape(-1, 2).astype(np.float64) / scale
+            grid = np.array([[c, r] for r in range(n) for c in range(7)], np.float64)
+            H, _ = cv2.findHomography(grid, img, 0)
+            if H is None:
+                continue
+            fit = cv2.perspectiveTransform(grid[None], H)[0]
+            step = np.median(np.linalg.norm(np.diff(img.reshape(n, 7, 2), axis=1), axis=2))
+            if step <= 0 or np.sqrt(((fit - img) ** 2).sum(1).mean()) / step > CHECKER_MAX_RESID:
+                continue
+            for off in range(1, 9 - n):
+                bp = grid + np.array([1.0, off])
+                Hb, _ = cv2.findHomography(bp, img, 0)
+                if Hb is not None:
+                    q = cv2.perspectiveTransform(unit, Hb)[0]
+                    if np.isfinite(q).all():
+                        out.append(q)
+    return out
+
+
 def _shift_grid(quad: np.ndarray, du: int, dv: int, size: int = RECT_SIZE) -> np.ndarray | None:
     """The same grid, moved by whole squares: which nine lines are the board."""
     try:
@@ -879,6 +930,9 @@ def calibrate_image(bgr: np.ndarray, *, size: int = RECT_SIZE, refine: bool = Tr
                     seed: int = 0, mask: np.ndarray | None = None,
                     candidates: list[np.ndarray] | None = None,
                     climb: bool = True) -> Calibration:
+    # The RANSAC in the refinement draws from OpenCV's global RNG, so without a
+    # reseed the same frame calibrates differently depending on what ran before.
+    cv2.setRNGSeed(seed)
     gray_full = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
     warnings: list[str] = []
 
@@ -891,6 +945,8 @@ def calibrate_image(bgr: np.ndarray, *, size: int = RECT_SIZE, refine: bool = Tr
         results = run(list(candidates))
     else:
         results = run(_detect(bgr, mask, seed, level=0))
+        if mask is None:
+            results = sorted(results + run(_checker_quads(bgr)), key=lambda r: -r["total"])
         if not results or results[0]["score"] < CHECKER_MIN:
             extra = run(_detect(bgr, mask, seed, level=1))
             if extra:
@@ -933,6 +989,32 @@ def calibrate_image(bgr: np.ndarray, *, size: int = RECT_SIZE, refine: bool = Tr
         ok=best["score"] >= CHECKER_MIN, warnings=warnings,
         method="grid" if best["n_saddle"] else "grid-lines",
     )
+
+
+MIN_SQUARE_PX = 50.0        # below this the pieces are a handful of pixels wide
+MAX_DARK_FRAC = 0.10        # this much of the frame near-black means a blocked lens
+
+
+def frame_checks(bgr: np.ndarray, corners: np.ndarray | None) -> list[str]:
+    """Setup problems the players can fix before the game, from the start frame.
+
+    Both come from the field tests. In two of the three evening games the lower
+    45 % of every frame was black — something on the stand was in front of the
+    lens — and in all three the board filled a small patch of the frame with
+    squares about 40 px across, which is too few pixels to tell a knight from a
+    pawn after rectification.
+    """
+    out: list[str] = []
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    small = cv2.resize(gray, (64, 64), interpolation=cv2.INTER_AREA)
+    if float((small < 20).mean()) > MAX_DARK_FRAC:
+        out.append("lens-blocked")
+    if corners is not None:
+        c = np.asarray(corners, dtype=np.float64).reshape(4, 2)
+        side = float(np.median([np.linalg.norm(c[(i + 1) % 4] - c[i]) for i in range(4)]))
+        if side / 8.0 < MIN_SQUARE_PX:
+            out.append("board-small")
+    return out
 
 
 def recalibrate(bgr: np.ndarray, prior: Calibration, *, band_px: float = 20.0,

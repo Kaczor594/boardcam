@@ -133,7 +133,8 @@ clock is the sole authority on `seq`; the server does not renumber.
 | `hello` | see §3.3 | sent on connect |
 | `peer` | `role, connected` | the camera connected or dropped |
 | `frame.ok` | `seq, k, bytes` | a burst frame landed on disk |
-| `calibration` | `ok, score, warning` | board detection result (Phase 3 fills this; Phase 1 never sends it) |
+| `calibration` | `ok, method, score, warning` | board detection result; usable when `ok` or `method == "manual"` — otherwise the clock shows a banner before the first move |
+| `analysis.error` | `error, board_not_found` | the game could not be read; `board_not_found` means the start frame was never calibrated and no tracking was attempted |
 | `analysis.ready` | `pgn, lichess_url, flagged` | tracker finished (Phase 3/5) |
 | `pong` | `t` | heartbeat reply |
 
@@ -144,7 +145,8 @@ clock is the sole authority on `seq`; the server does not renumber.
 | `hello` | `game_id, room, status, seq, config, peer_connected` | connect / reconnect state |
 | `peer` | `role, connected` | the clock connected or dropped |
 | `capture` | `seq, reason` | **grab a burst now**; `reason` ∈ `start | press | flag | stop` |
-| `calibration` | `ok, score, corners, warning` | Phase 3 overlay data |
+| `calibration` | `ok, method, score, corners, corners_norm, frame_size, setup_warnings, manual_corners_needed, ...` | the full `calibration.json`; `corners` are frame pixels, `corners_norm` the same quad in 0..1 (what the overlay draws); `setup_warnings` ⊆ `lens-blocked | board-small` |
+| `analysis.error` | `error, board_not_found` | as for the clock; with `board_not_found` the camera reopens the corner panel, and saving corners on a finished game re-runs the analysis |
 | `pong` | `t` | heartbeat reply |
 
 The camera never sends game events. It may send `camera.status`
@@ -163,7 +165,11 @@ metadata — used to light the "paired ●" indicator honestly.
   each as `k=0,1,2`. The burst is **cut short** if another `capture` arrives
   first: remaining grabs are cancelled and the new sequence begins. The engine
   tolerates a short burst.
-- Encoding: JPEG quality 0.85, long edge scaled to 1280 px, aspect preserved.
+- Encoding: JPEG quality 0.85, long edge scaled to 1920 px, aspect preserved.
+- The camera may be held portrait or landscape. A capture whose orientation
+  differs from frame 0's (the phone turned mid-game) is rotated back on upload,
+  by whichever quarter-turn best matches frame 0, so every stored frame of a
+  game shares one orientation.
 - `clock.pause` and `clock.resume` do **not** capture.
 - `clock.stop` and `clock.flag` **do** capture, because the last move of a game
   is often played without pressing the clock.
@@ -265,7 +271,7 @@ cached in Safari.
 ### Frames
 
 Uploads are `multipart/form-data`, field name `file`, JPEG quality 0.85, long
-edge 1280 px, aspect preserved (a 1920x1080 stream stores as 1280x720). The
+edge 1920 px, aspect preserved (the camera asks for a 1920x1080 stream). The
 server checks the JPEG SOI marker and returns 415 otherwise, which is what
 keeps an ngrok interstitial HTML page off disk. Frame files are zero-padded to
 four digits (`0003_1.jpg`) so they sort lexically.

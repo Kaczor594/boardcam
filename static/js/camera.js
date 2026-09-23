@@ -6,7 +6,9 @@ import { renderQr } from './qr.js';
 
 const BURST_OFFSETS_MS = [0, 400, 900];   // PROTOCOL.md §4
 const PRESTART_INTERVAL_MS = 2000;
-const LONG_EDGE = 1280;
+// The board is a patch of the frame, not all of it: at 1280 px its squares came
+// out about 40 px across in every field test, too few to read pieces by.
+const LONG_EDGE = 1920;
 const JPEG_QUALITY = 0.85;
 const UPLOAD_RETRY_MS = 800;
 
@@ -35,6 +37,7 @@ const el = {
   cornerCancel: document.getElementById('corner-cancel'),
   lockBtn: document.getElementById('lock-btn'),
   lockState: document.getElementById('lock-state'),
+  setupWarn: document.getElementById('setup-warn'),
 };
 
 let game = null;          // {game_id, room, ...}
@@ -45,6 +48,7 @@ let burstTimers = [];
 let started = false;      // true once the first capture command arrives
 let startLocked = false;  // true once the players say the board is set
 let manualCorners = false;// true once a player has placed the corners by hand
+let boardFound = false;   // detected with a passing score, or placed by hand
 let uploaded = 0;
 let dropped = 0;
 
@@ -101,7 +105,9 @@ async function startCamera() {
   el.errorLine.hidden = true;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1920 } },
+      // Constraints are read against the sensor, which is landscape, so this
+      // asks for 1920x1080 however the phone is held.
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
       audio: false,
     });
   } catch (err) {
@@ -273,8 +279,7 @@ function stopPrestartLoop() {
 
 /**
  * Draw the detected board quadrilateral. Corners are four [x, y] pairs in
- * 0..1 of the frame. Phase 1 never calls this; Phase 3 does, once calibration
- * reports corners.
+ * 0..1 of the frame — the server's `corners_norm`, not its pixel `corners`.
  */
 export function drawCalibration(corners) {
   el.overlay.replaceChildren();
@@ -307,6 +312,20 @@ function syncOverlay() {
 window.addEventListener('resize', syncOverlay);
 window.addEventListener('orientationchange', () => setTimeout(syncOverlay, 300));
 el.video.addEventListener('loadedmetadata', syncOverlay);
+
+/* ---------------- setup warnings ---------------- */
+
+const SETUP_TEXT = {
+  'board-not-found': 'Board not found — mark the four corners, or the moves cannot be read.',
+  'lens-blocked': 'Part of the picture is black — something on the stand is covering the lens.',
+  'board-small': 'The board is small in the picture. Move the phone closer or hold it landscape.',
+};
+
+function showSetupWarnings(codes) {
+  const lines = codes.map((c) => SETUP_TEXT[c]).filter(Boolean);
+  el.setupWarn.textContent = lines.join(' ');
+  el.setupWarn.hidden = lines.length === 0;
+}
 
 /* ---------------- manual corner fallback ---------------- */
 
@@ -442,7 +461,29 @@ el.cornerStill.addEventListener('load', syncCornerOverlay);
 window.addEventListener('resize', syncCornerOverlay);
 window.addEventListener('orientationchange', () => setTimeout(syncCornerOverlay, 300));
 
-el.cornerCancel.addEventListener('click', () => { el.cornerPanel.hidden = true; });
+/**
+ * The panel's second button. Once the board is known it simply closes the
+ * panel. Until then closing it would let the game be played blind, so instead
+ * it retakes the start photo — possible only while the pieces are still in the
+ * start position, i.e. before the first press.
+ */
+function syncCornerSecondary() {
+  if (boardFound) {
+    el.cornerCancel.textContent = 'Close';
+    el.cornerCancel.disabled = false;
+  } else {
+    el.cornerCancel.textContent = 'Retake start photo';
+    el.cornerCancel.disabled = started;
+  }
+}
+
+el.cornerCancel.addEventListener('click', async () => {
+  if (boardFound) { el.cornerPanel.hidden = true; return; }
+  if (started) return;
+  el.cornerPanel.hidden = true;
+  toast('Looking for the board again…');
+  await captureOne(0, 0);
+});
 el.cornerUse.addEventListener('click', async () => {
   if (!game) {
     toast('No game to calibrate yet.');
@@ -459,6 +500,7 @@ el.cornerUse.addEventListener('click', async () => {
   try {
     await api(`/api/games/${game.game_id}/corners`, { method: 'POST', body: { corners } });
     manualCorners = true;
+    boardFound = true;
     el.cornerPanel.hidden = true;
     toast('Corners saved. They will not be overwritten.');
   } catch (err) {
@@ -481,17 +523,33 @@ function onMessage(msg) {
       break;
     case 'capture':
       started = true;
+      syncCornerSecondary();
       stopPrestartLoop();
       el.lockBtn.hidden = true;
       startLocked = true;
       startBurst(msg.seq);
       break;
-    case 'calibration':
-      setDot(el.calDot, msg.ok ? 'ok' : (msg.warning ? 'warn' : 'error'));
-      if (msg.ok && msg.corners) drawCalibration(msg.corners);
+    case 'calibration': {
+      const usable = Boolean(msg.ok) || msg.method === 'manual';
+      boardFound = usable || manualCorners;
+      setDot(el.calDot, boardFound ? 'ok' : 'error');
+      drawCalibration(usable ? msg.corners_norm : null);
+      showSetupWarnings(usable ? (msg.setup_warnings || []) : ['board-not-found']);
+      syncCornerSecondary();
       // Never reopen over corners a player already placed by hand: the panel
       // popping back up is how they learn their work was thrown away.
-      if (!msg.ok && msg.method !== 'manual' && !manualCorners) openCornerPanel();
+      if (!boardFound && el.cornerPanel.hidden) openCornerPanel();
+      break;
+    }
+    case 'analysis.error':
+      if (msg.board_not_found) {
+        toast('The board was never found. Mark the corners to read this game.');
+        boardFound = false;
+        syncCornerSecondary();
+        openCornerPanel();
+      } else {
+        toast(`Analysis failed: ${msg.error}`);
+      }
       break;
     case 'analysis.ready': {
       const flagged = Array.isArray(msg.flagged) ? msg.flagged.length : (msg.flagged || 0);

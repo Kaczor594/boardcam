@@ -129,7 +129,7 @@
     #control-bar #stop-btn:hover:not(:disabled) { background: rgba(185, 111, 62, 0.14); }
 
     /* ---------- finished banner ---------- */
-    #finished-banner {
+    #finished-banner, #board-banner {
       position: fixed;
       left: var(--space-3);
       right: var(--space-3);
@@ -234,6 +234,8 @@
   </div>
 
   <p id="finished-banner" hidden></p>
+  <p id="board-banner" hidden>The camera has not found the board. Mark the corners on the
+  camera phone before the first move, or this game cannot be read.</p>
 
   <div id="analysis-panel" hidden>
     <h2>Analysis</h2>

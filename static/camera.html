@@ -91,6 +91,14 @@
     text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
   }
   #lock-state { color: var(--moss-20); font-weight: 600; }
+  #setup-warn {
+    margin: var(--space-2) 0 0;
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--paper-10);
+    background: rgba(166, 56, 38, 0.88);
+  }
 
   /* ---------- manual corners ---------- */
   #corner-panel {
@@ -106,6 +114,16 @@
   #corner-stage { position: relative; flex: 1 1 auto; min-height: 0; }
   #corner-still { width: 100%; height: 100%; object-fit: contain; display: block; }
   #corner-svg { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+
+  /* Landscape phone: little height to spare, so the instructions shrink and the
+     photo gets the room. */
+  @media (orientation: landscape) and (max-height: 540px) {
+    #corner-panel { padding: var(--space-2); gap: var(--space-2); }
+    #corner-panel h2 { display: none; }
+    #corner-panel > p { font-size: var(--text-xs); }
+    #lock-bar { bottom: var(--space-8); left: 20%; right: 20%; }
+    #lock-hint { display: none; }
+  }
 </style>
 </head>
 <body class="app">
@@ -122,7 +140,8 @@
     <p class="eyebrow">BoardCam — camera</p>
     <h1>Put this phone on the stand</h1>
     <p class="prose muted">Aim it at the board from the side, as high as the stand
-    allows. The whole board plus a margin should be in frame.</p>
+    allows. Portrait or landscape both work — pick whichever lets the board fill
+    more of the picture, with a small margin all round.</p>
 
     <div class="card stack" style="margin-bottom: var(--space-5);">
       <p class="eyebrow">Join code for the clock phone</p>
@@ -148,6 +167,7 @@
     <button type="button" class="btn btn-primary btn-lg btn-block" id="lock-btn">Board is set</button>
     <p id="lock-hint">Tap once when the pieces are placed, before White's first move.</p>
     <p id="lock-state" hidden>Start position locked.</p>
+    <p id="setup-warn" hidden></p>
   </div>
   <div id="stage-footer">
     <span id="upload-label">0 up</span>
@@ -169,7 +189,7 @@
     <svg id="corner-svg" viewBox="0 0 100 100" preserveAspectRatio="none"></svg>
   </div>
   <div class="row">
-    <button class="btn" id="corner-cancel">Cancel</button>
+    <button class="btn" id="corner-cancel">Retake start photo</button>
     <button class="btn btn-primary" id="corner-use">Use these corners</button>
   </div>
 </div>

@@ -63,6 +63,7 @@ const el = {
   reviewLink: document.getElementById('review-link'),
   flaggedCount: document.getElementById('flagged-count'),
   finishedBanner: document.getElementById('finished-banner'),
+  boardBanner: document.getElementById('board-banner'),
 };
 
 /* ---------------- state ---------------- */
@@ -193,7 +194,18 @@ function handleServerMessage(msg) {
       break;
     }
     case 'calibration': {
-      setDot(el.calDot, msg.ok ? 'ok' : (msg.warning ? 'warn' : 'error'));
+      const usable = Boolean(msg.ok) || msg.method === 'manual';
+      setDot(el.calDot, usable ? 'ok' : 'error');
+      // Said before the first move, not after the last: a game played against
+      // an unfound board is a game nobody can read back.
+      el.boardBanner.hidden = usable || finishedNotice;
+      break;
+    }
+    case 'analysis.error': {
+      el.boardBanner.hidden = true;
+      toast(msg.board_not_found
+        ? 'The board was never found, so the moves were not read. Mark the corners on the camera phone to recover this game.'
+        : `Analysis failed: ${msg.error}`);
       break;
     }
     case 'analysis.ready': {
@@ -220,6 +232,7 @@ function handleServerMessage(msg) {
 function gameIsOver(result) {
   if (finishedNotice) return;
   finishedNotice = true;
+  el.boardBanner.hidden = true;
   el.finishedBanner.hidden = false;
   el.finishedBanner.textContent = result
     ? `This game is finished (${result}). Start a new one on the camera phone and scan the new code.`

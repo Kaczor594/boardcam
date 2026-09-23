@@ -48,14 +48,21 @@ def build_pgn(result, game_dir: str | Path | None = None,
     was stopped at ``*`` is the common case.
     """
     events = events if events is not None else (read_events(game_dir) if game_dir else [])
-    cfg = next((e for e in events if e.get("type") == "clock.config"), {})
+    cfg = next((e for e in events if e.get("type") == "clock.config"), None)
+    if cfg is None:
+        # The clock only sends a config event when the players change the
+        # preset; the game's meta.json always has the one that was played.
+        meta = game_dir and Path(game_dir, "meta.json")
+        cfg = json.loads(meta.read_text()) if meta and meta.exists() else {}
     stop = next((e for e in reversed(events) if e.get("type") == "clock.stop"), {})
     by_seq = {e["seq"]: e for e in events if "seq" in e}
 
     game = chess.pgn.Game()
     game.headers["Event"] = "BoardCam"
-    created = next((e.get("server_t") or e.get("t") for e in events), None)
-    game.headers["Date"] = (datetime.fromtimestamp(created / 1000).strftime("%Y.%m.%d")
+    # server_t is Unix seconds, the clock's own t is milliseconds.
+    created = next((e["server_t"] if e.get("server_t") else (e.get("t") or 0) / 1000
+                    for e in events if e.get("server_t") or e.get("t")), None)
+    game.headers["Date"] = (datetime.fromtimestamp(created).strftime("%Y.%m.%d")
                             if created else "????.??.??")
     game.headers["White"] = cfg.get("white_name") or "White"
     game.headers["Black"] = cfg.get("black_name") or "Black"
