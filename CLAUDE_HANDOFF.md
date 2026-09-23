@@ -1,6 +1,6 @@
 # Claude Code Handoff — BoardCam
 
-> Last updated: 2026-09-12
+> Last updated: 2026-09-23
 > Repo: https://github.com/Kaczor594/boardcam.git (public)
 > Branch: main
 
@@ -21,30 +21,38 @@ build step. Plan and history: `planning/specs/2026-09-12-boardcam.md`.
 
 ## Current State
 
-Phases 1–5 are complete and committed. **Phase 6 (field test) is in progress and
-is where the open work is.**
+Phases 1–5 are complete and committed. **Phase 6 (field test) is in progress.**
+On 2026-09-23 a review pass over the three recorded games fixed most of what
+they exposed (`3c625a7`, see the spec's last amendment). Nothing has been played
+on the new build yet.
 
 Working:
 
 - Pairing, clock, capture, upload, WebSocket reconnect. Three real games recorded
   without losing a frame.
 - ngrok tunnel on the reserved domain `absolutely-peelable-luisa.ngrok-free.dev`
-  (`BOARDCAM_DOMAIN` in `~/.zprofile`). Health, WebSocket and the phone pages all
-  verified through it.
-- Calibration, rectification, the tracking engine, the vision-LLM fallback, the
-  review and correction loop, lichess import, and `scripts/tune.py`.
-- Review page at `/review?game=<id>`: move list with confidence, before/after raw
-  and rectified images, candidates, SAN correction that re-runs the tracker,
-  result override, verify, delete.
+  (`BOARDCAM_DOMAIN` in `~/.zprofile`).
+- Calibration now finds the board on all three games' start frames (partial
+  checkerboard detection of the empty middle ranks, pooled with the line
+  detector). Game 3: 0.11 → 0.93.
+- A game whose board was never found is refused analysis, and both phones say so
+  before the first move.
+- The tracker uses who pressed the clock (`press_side_penalty` = 10).
+- Camera works portrait or landscape; captures at 1920 px.
+- Games `20260912-212357-0e1f` and `20260912-213953-bc0f` are re-analysed on
+  disk and waiting for Isaac's review. Game 3 now reads
+  `1.e4 e5 2.Nc3 Nc6 3.Nf3 Nf6 4.Nxe5 Bb4 5.Qh5 Nxe5 6.Bc4 b5 7.Bd5 Bxc3 8.Qxe5+`.
 
-Not working, in priority order:
+Not working / unverified:
 
-1. **No real game has produced a correct PGN yet.** Three attempts, three
-   different causes, all now understood (see Known Issues).
-2. The Phase 3 accuracy gate was never met and Isaac chose to proceed
-   (74.6 % plies on `shallow` against a 98 % gate). Five `tests/test_tracker.py`
-   tests fail because of it. They are the only failures in the suite.
-3. Automatic calibration is defeated by wood grain (see Known Issues).
+1. **No real game has been confirmed correct yet** — the reviews above are the
+   next step.
+2. The phone-page changes (banner, undismissable corner panel, landscape CSS,
+   setup warnings, overlay fix, 1920×1080 request) were only syntax-checked,
+   never run on an iPhone.
+3. Synthetic accuracy is far from the gates: `shallow` 62.1 %, `hard` 86.9 %
+   plies (40/30-game corpora, `--no-llm`). Five `tests/test_tracker.py` tests
+   fail, the same five as before this session; everything else passes (79).
 
 ## Environment Setup
 
@@ -121,7 +129,30 @@ Each spec phase gets one commit, and its short hash is appended to the spec's
 
 ## Recent Changes
 
-### 2026-09-12 (this session)
+### 2026-09-23 — review pass over the recorded games (`3c625a7`, `66f783b`)
+
+- `engine/calibrate.py`: `_checker_quads` (cv2.findChessboardCornersSB on 7×n
+  patterns, three scales, homography-residual filter) pooled into
+  `calibrate_image`; `cv2.setRNGSeed(seed)` for reproducibility; new
+  `frame_checks` → `lens-blocked` / `board-small` setup warnings.
+- `server/analysis.py`: `calibration_usable` gate in `track_frame`/`finish`
+  (`BOARD_NOT_FOUND`); payload gains `corners_norm`, `frame_size`,
+  `setup_warnings`; `match_start_orientation` rotates uploads to frame 0's
+  orientation; `_build_tracker` takes camera side from the saved corners.
+- `server/app.py`: rotation on upload; `analysis.error` carries
+  `board_not_found`; saving corners on a finished game re-runs the analysis.
+- `engine/tracker.py`: `add_frame(seq, paths, side)`, `press_sides(game_dir)`,
+  side-to-move penalty in `_step`; `engine/params.json` gains
+  `press_side_penalty: 10.0` (6 was too weak — the true path is evicted first).
+- `engine/pgn.py`: Date was 1970 (seconds ÷ 1000); TimeControl/names fall back
+  to `meta.json`.
+- Camera page: `LONG_EDGE` 1280 → 1920, stream asks 1920×1080, overlay uses
+  `corners_norm` (it never showed before), corner panel undismissable until the
+  board is found ("Retake start photo" before the first press), setup warning
+  strip, landscape CSS. Clock page: board-not-found banner.
+- `tests/test_field_fixes.py` (8 tests); PROTOCOL.md and SETUP.md updated.
+
+### 2026-09-12
 
 - **Phase 5 landed** (`60f5c73`): review page, correction loop, result override,
   verify, label export in `scripts/tune.py`, lichess import.
@@ -144,71 +175,48 @@ Each spec phase gets one commit, and its short hash is appended to the spec's
 
 ## Known Issues
 
-**1. Three real games, three failure causes.** All diagnosed, with the evidence
-in the spec's Phase 6 amendments.
+**1. Beam eviction (Phase 3 gate unmet).** The search, not the model, is the
+bottleneck: the true move ranks first on 88 % of frames and top-three on 98 %,
+yet the true game is evicted from the beam. The press-side fix only worked at a
+penalty high enough to beat eviction. Whoever tunes this next should fit against
+the beam's output, not per-frame top-1, and re-derive anything measured in nats
+when the likelihood is rescaled. The null prior costs only ~2 nats more than a
+move, which is how a real move gets read as "no move".
 
-- Game 1 (15:33, `20260912-152655-89a0`): the start photo already contained
-  White's first move, because the camera refreshed frame 0 until the clock
-  started, and the clock starts on White's first press. Fixed by the "Board is
-  set" button.
-- Game 2 (21:23): recorded into game 1's directory. The camera page rejoined the
-  finished game from its own URL and the clock carried its press numbering on, so
-  three sessions ended up interleaved in one directory. Fixed by the
-  finished-game guards. The session was rebuilt into `20260912-212357-0e1f` and
-  tracks to 11 plies with 4 flagged, uncorrected.
-- Game 3 (21:41, `20260912-213953-bc0f`): recorded cleanly, own directory,
-  correct sequence numbers — but **calibration failed (score 0.11, `ok: False`)
-  and the tracker ran anyway**, emitting a confident nonsense PGN of rook
-  shuffles. See issue 3.
+**2. Hands in the burst.** Test games were played fast, and the +900 ms burst
+frame often already has the *next* player's hand over the board (game 3 seq 5,
+12). `choose_burst` drops it relatively, which worked here.
 
-**2. Automatic calibration loses to wood grain.** The detector looks for the most
-convincing progression of nine evenly spaced parallel lines. On the first game it
-found 1418 segments, the longest 748 px against a 40 px square edge, and every
-candidate quad landed on the hardwood floor. It succeeded unaided (score 0.923)
-only on the game where the board filled a good part of the frame. Root cause is a
-corpus gap: `synth/` renders a textured tabletop with no long straight lines.
-`cv2.findChessboardCornersSB` was tried and rejected — it needs the full 7×7
-inner grid unoccluded, which a board with pieces never is.
+**3. Lens obstruction on the stand.** In games 2 and 3 the lower ~45 % of every
+frame is black. The camera page now warns about it; the physical cause is
+unknown.
 
-**3. A failed calibration does not stop the analysis.** `server/analysis.py`
-tracks the game with `ok: False` and writes a PGN that looks as confident as any
-other. Nobody is told the geometry was never found. This is the single cheapest
-fix available and it is not done.
+**4. Game 1's directory is unusable.** It holds three sessions, and its frame 0
+was overwritten by the evening's. Game 2's start frame is borrowed from it
+(byte-identical), so game 2 is also less trustworthy than game 3.
 
-**4. Phase 3 accuracy gate unmet.** 74.6 % plies correct on `shallow` against a
-98 % gate; five `tests/test_tracker.py` failures follow from it. Phase 3's own
-analysis says the search, not the model, is the bottleneck: the true move is
-ranked first on 88 % of frames and in the top three on 98 %, and the true game
-scores 60–180 nats better in total yet is still evicted from a beam of 30.
-Whoever tunes this next should fit against the beam's output, not per-frame
-top-1, and re-derive anything measured in nats when the likelihood is rescaled.
+**5. `planning/specs/2026-09-12-boardcam.html` is stale** (last rendered at
+Phase 3); the `.md` is authoritative.
 
-**5. Lighting is not modelled.** The evening frames are far darker than the start
-photograph with a strong shadow gradient. No synthetic profile reproduces a
-global brightness shift of that size between `seq 0` and `seq 1`.
+The former "lighting not modelled" issue was retracted: it was an artefact of
+rebuilding game 2.
 
 ## Next Steps
 
 The spec `planning/specs/2026-09-12-boardcam.md` is the source of truth; Phase 6
-is the only open phase. In the order that unblocks the next game:
+is the only open phase.
 
-- [ ] **Refuse to analyse a game whose calibration never passed.** Surface it on
-      both phones before the first move rather than after the last, and make the
-      camera page insist on manual corners instead of letting the panel be
-      dismissed. This is what wasted game 3.
-- [ ] Have Isaac review and correct `20260912-212357-0e1f` and
-      `20260912-213953-bc0f` on `/review`, then press confirm. That produces the
-      first labelled real games, which is what `scripts/tune.py` needs.
-- [ ] Add a synthetic profile with a competing floor grid, so the calibrator is
-      gated against the failure that actually happens.
-- [ ] Consider restricting the line search to the region whose local colours
-      alternate between two tones, rather than the whole frame.
-- [ ] Run `.venv/bin/python -m engine.evaluate data/real` once there are labelled
-      games, then `scripts/tune.py --dry-run`.
+- [ ] Isaac reviews and confirms `20260912-213953-bc0f` (the clean one) and
+      `20260912-212357-0e1f` on `/review`. That gives the first labelled real games.
+- [ ] Play one game on the new build, ideally landscape. Check that the green
+      overlay lands on the board, the setup warnings, the `camera.status` w/h
+      (does iOS give 1920×1080?), and what is blocking the bottom of the lens.
+- [ ] Copy the reviewed games to `data/real/`, then run
+      `.venv/bin/python -m engine.evaluate data/real` and `scripts/tune.py --dry-run`.
+- [ ] Attack beam eviction (Known issue 1). It is now the main accuracy limit.
+- [ ] Add a synthetic profile with a competing floor grid so the calibrator is
+      gated against it.
 - [ ] Phase 6 final validation: ≥ 99 % plies correct on `data/real` with 100 %
-      wrong-ply recall, and one real game importing into lichess without hand
-      edits.
+      wrong-ply recall, and one real game importing into lichess without hand edits.
 
-Open question for Isaac: whether the camera phone should be held landscape. Both
-failures had the board in the top third of a portrait frame with the lower half
-unlit and unused.
+Settled 2026-09-23: the camera phone should work held either way (it now does).
