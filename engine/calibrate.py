@@ -66,7 +66,7 @@ class Calibration:
         Phase 3's second orientation check: frame 1 must change squares on
         white's side of the board. If it changed black's instead, the piece
         luminances lied and the whole calibration is 180 degrees out, so the
-        tracker restarts from this.
+        old move reader restarted from this.
         """
         rot = np.array([self.corners[2], self.corners[3],
                         self.corners[0], self.corners[1]])

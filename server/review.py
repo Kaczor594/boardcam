@@ -1,12 +1,11 @@
 """After the game: the review payload, corrections, and the rectified overlays.
 
 A correction is not an edit to the move list. The player pins one ply to the
-move they actually played and the **whole game is tracked again** with that ply
-constrained, because a ply read wrongly usually poisons the plies after it — the
-board the tracker was matching against was wrong from there on. Re-running is
-what puts those back, and it is why `labels.json` stores the pins rather than
-the corrected move list alone: a later engine can be re-constrained from the
-same human input without anyone labelling the game twice.
+move they actually played and the game is solved again with that ply
+constrained, which is why `labels.json` stores the pins rather than the
+corrected move list alone. The per-press reader that used to do the re-run was
+removed on 2026-11-16; until the line solver of the photo-positions spec exists
+(Phase 3) a correction is refused with 409 rather than half-applied.
 
 Everything here is synchronous and slow enough to belong in a worker thread;
 `server.app` calls it with `asyncio.to_thread`.
@@ -53,7 +52,7 @@ def write_labels(game_id: str, labels: dict) -> dict:
 
 
 def constraints_of(labels: dict) -> dict[int, chess.Move]:
-    """The pinned plies, as the tracker wants them."""
+    """The pinned plies, as a solver wants them."""
     out: dict[int, chess.Move] = {}
     for c in labels.get("corrections") or []:
         try:
@@ -130,23 +129,12 @@ def parse_move(game_id: str, ply: int, san: str | None, uci: str | None) -> ches
         raise ValueError(f"{san!r} is not a legal move here: {exc}") from exc
 
 
-def _rerun(game_id: str, labels: dict) -> dict:
-    """Track the game again with every pinned ply constrained."""
-    from engine.features import load_params
-    from engine.pgn import build_pgn
-    from engine.tracker import track_game
+RERUN_GONE = "corrections wait for the line solver (photo-positions spec, Phase 3)"
 
-    gdir = storage.game_dir(game_id)
-    result = track_game(gdir, load_params(), constraints=constraints_of(labels))
-    payload_json = result.to_json()
-    payload_json["game_id"] = game_id
-    gdir.joinpath("analysis.json").write_text(json.dumps(payload_json, indent=1))
-    pgn = build_pgn(result, gdir, result_override=labels.get("result")
-                    or storage.read_meta(game_id).get("result"))
-    gdir.joinpath("game.pgn").write_text(pgn.rstrip("\n") + "\n")
-    labels["moves"] = [p.san for p in result.plies]
-    write_labels(game_id, labels)
-    return payload_json
+
+def _rerun(game_id: str, labels: dict) -> dict:
+    """Solve the game again with every pinned ply constrained. Not yet possible."""
+    raise LookupError(RERUN_GONE)
 
 
 def apply_correction(game_id: str, ply: int, san: str | None = None,
@@ -217,7 +205,7 @@ def set_result(game_id: str, result: str) -> dict:
 
 
 def set_verified(game_id: str, verified: bool) -> dict:
-    """Mark the move list as truth, which is what puts it in front of tune.py."""
+    """Mark the move list as truth."""
     labels = read_labels(game_id)
     labels["verified"] = bool(verified)
     if verified and not labels["moves"]:
@@ -230,7 +218,7 @@ def set_verified(game_id: str, verified: bool) -> dict:
 class _ReplayedResult:
     """Just enough of a ``TrackResult`` for ``build_pgn`` to read a saved game.
 
-    Rewriting the PGN after a result override should not cost a re-track, and
+    Rewriting the PGN after a result override should not cost a re-solve, and
     everything ``build_pgn`` touches is already in ``analysis.json``.
     """
 

@@ -3,6 +3,13 @@
 Authoritative contract between the two phone pages and the server. Written in
 Phase 1; every later phase reads this file rather than the spec.
 
+> **2026-11-16 — in transition.** The stand-camera design is abandoned
+> (`planning/specs/2026-11-16-photo-positions.md`). Phase 1 of that spec removed
+> the camera page, calibration push, per-press move reading and manual corners;
+> §§1–4 still describe the camera role until Phase 2 replaces it with photo
+> intake on the clock phone. Corrections (§8) return 409 until the Phase 3 line
+> solver exists. §9 is the new reader and position interface.
+
 Transport: HTTP (JSON + multipart) for state and uploads, one WebSocket per
 client for events. All paths are relative to the server root, which is reached
 through the ngrok tunnel over HTTPS.
@@ -462,3 +469,62 @@ Deletes the game directory (§2). The review page offers this behind the shared
 becomes `truth.pgn`. `corrections` is the human input that produced it, kept
 separately so a re-run with new engine parameters can be re-constrained rather
 than re-labelled.
+
+---
+
+## 9. Reading a position from a photo (photo-positions spec, Phase 1)
+
+Two engine modules, no server wiring yet (Phase 2 adds `POST /games/{id}/photos`).
+
+### `engine.reader.read_position(image, backend="claude", model="claude-fable-5-2", *, grid_image=None, max_edge=2576, effort=None, client=None) -> BoardRead`
+
+- `image`: a path, `bytes` or PIL image. EXIF orientation is applied (iPhone
+  photos are stored sideways with orientation 6), then the long edge is capped
+  at `max_edge` (2576 px, the current Claude models' maximum) and the photo is
+  sent as JPEG q90.
+- Default variant is **photo-only**: the whole photo, no grid, no crop, so no
+  grid finder is needed. `grid_image` selects the pilot's variant (a crop of the
+  mat plus the same crop with a labelled grid); it needs four corners and exists
+  for comparison only. Which one ships is decided by the measurement in the
+  spec's Notes.
+- `BoardRead`: `rows` (8 strings of 8, `KQRBNPkqrbnp.`, **photo frame**: row 0
+  is the row of squares farthest from the camera, column 0 the leftmost),
+  `home` (side of the photo where White's home rank is: `top|bottom|left|right|unknown`),
+  `backend`, `model`, `cost` (dollars, from `reader.PRICES`), `secs`,
+  `tokens_in`, `tokens_out`. `to_json()` gives the dict that is cached and stored.
+- Failure is `ReadError(reason, detail)`, never an empty board. Reasons the
+  model produced (cached and scored as a wrong board): `refusal`, `max_tokens`,
+  `no_board`, `bad_shape`, `bad_symbol`. Transport reasons (not cached, retry):
+  `api_<status>`, `rate_limited`, `connection`.
+- No server-side model fallback: a read is always by the model named.
+- `backend="local"` arrives in Phase 6 with the same signature.
+
+### `engine.position.build_position(rows, home, white_to_move=True, fullmove=1) -> Position`
+
+- Rotates the photo-frame read into board coordinates by White's home side
+  (`square_of(r, c, home)`); `home="unknown"` is replaced by `guess_home(rows)`
+  (White's men low, Black's high, no pawns on back ranks) and marked
+  `home_guessed`.
+- `Position`: `fen`, `home` (used), `home_guessed`, `flags`, `legal`
+  (= no flags). Flags: `no_white_king`, `no_black_king`, `too_many_kings`,
+  `too_many_white_pawns`, `too_many_black_pawns`, `pawns_on_back_rank`,
+  `too_many_white_pieces`, `too_many_black_pieces`,
+  `side_not_to_move_in_check`, `too_many_checkers`, `impossible_check`.
+- Castling rights are a guess (king and rook on their home squares); the line
+  solver sets the real ones from the path. En passant is never set. Halfmove 0.
+- Side to move comes from the clock (press count parity at the photo);
+  `fullmove_of(ply)` gives the move number after `ply` half-moves.
+- `rotate_rows(rows, k)` turns a photo-frame grid clockwise `k` quarter turns —
+  what the phone's "rotate" control does before confirming.
+
+### Label sets (`data/labels/<set>/`, never committed)
+
+`photos/<name>.jpg` (full resolution, EXIF orientation kept), `truth.json`
+`{name: {fen | rows+home, split, session (capture date), done, excluded}}`,
+`reads/<model>/<variant>/<name>.json` (cached `BoardRead`s or model errors),
+`pilot/` (the 2026-11-16 pilot's scripts and crops). Hold-out truth is a FEN
+placement (board frame), entered on `label-holdout.html` from
+`python -m scripts.label_page <set> --split holdout` and folded back with
+`--merge`. `engine.read_eval` scores in board coordinates (see its docstring):
+`per-square`, `occupied-square`, `perfect-board` at the best-fitting
+orientation, `home-side`, `fen-correct`, cost and seconds per photo, confusions.

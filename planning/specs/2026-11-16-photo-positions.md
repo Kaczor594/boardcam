@@ -1,11 +1,11 @@
 ---
 created: 2026-11-16                 # NEVER changes
-modified: [2026-11-16]              # append-only
-sessions: [2026-11-16]              # append-only; one entry per session that touches this spec
+modified: [2026-11-16, 2026-11-16]  # append-only
+sessions: [2026-11-16, 2026-11-16]  # append-only; one entry per session that touches this spec
 commits: []                         # append-only; short hashes, appended as phases land
 back_refs: [planning/specs/2026-09-12-boardcam.md]
 forward_refs: []
-status: draft                       # draft | in-progress | done | abandoned
+status: in-progress                 # draft | in-progress | done | abandoned
 ---
 
 # BoardCam — hand-taken photos → positions → likely lines
@@ -85,15 +85,15 @@ Remove the stand-camera code, port the pilot's reader into the engine, and make
 its accuracy a repeatable measurement.
 **Execution:** `Opus` — deletion plus one well-understood module. Agents: none — sequential, small surface.
 **Context:** **CLEAR after this phase** — the old code's details die here; Phase 2 needs only the reader's interface, which is written into `docs/PROTOCOL.md`.
-- [ ] Set the September spec to `abandoned` with an Amendments entry pointing here
-- [ ] Delete the files listed under Removed and their tests; `pytest` green on what remains
-- [ ] Move pilot data from `data/label-pilot/` to `data/labels/green-mat/` (photos + `truth.json`; stays gitignored)
-- [ ] `engine/reader.py`: Claude backend from the pilot prompt; structured output; model id is a parameter, default `claude-fable-5-2`; refusal and `max_tokens` handled as errors, not empty boards. Load the `claude-api` skill first.
-- [ ] Measure photo-only against photo-plus-grid on the 10 pilot photos and keep photo-only if it is within 0.5 points (it removes the grid dependency)
-- [ ] `engine/position.py`: rotate the read by White's home side, set side to move, build the FEN, flag illegal positions (king count, pawns on back ranks, more than 16 a side, side not to move in check)
-- [ ] `engine/read_eval.py`: per-square, occupied-square, perfect-board and home-side accuracy, cost and seconds per photo, confusion pairs
-- [ ] Label the remaining usable green-mat photos (about 20) as a hold-out the prompt is never tuned on. Needs Isaac, from a blank board as in the pilot.
-- [ ] Write the reader and position interfaces into `docs/PROTOCOL.md`
+- [x] Set the September spec to `abandoned` with an Amendments entry pointing here
+- [x] Delete the files listed under Removed and their tests; `pytest` green on what remains
+- [x] Move pilot data from `data/label-pilot/` to `data/labels/green-mat/` (photos + `truth.json`; stays gitignored)
+- [x] `engine/reader.py`: Claude backend from the pilot prompt; structured output; model id is a parameter, default `claude-fable-5-2`; refusal and `max_tokens` handled as errors, not empty boards. Load the `claude-api` skill first.
+- [F] Measure photo-only against photo-plus-grid on the 10 pilot photos and keep photo-only if it is within 0.5 points (it removes the grid dependency) — blocked: `ANTHROPIC_API_KEY` from `~/.zprofile` returns 401 `invalid x-api-key` (req_011Ch7LPz8rKkMLX9sro3tcT); crop-grid side is in the cache from the pilot
+- [x] `engine/position.py`: rotate the read by White's home side, set side to move, build the FEN, flag illegal positions (king count, pawns on back ranks, more than 16 a side, side not to move in check)
+- [x] `engine/read_eval.py`: per-square, occupied-square, perfect-board and home-side accuracy, cost and seconds per photo, confusion pairs
+- [F] Label the remaining usable green-mat photos (about 20) as a hold-out the prompt is never tuned on. Needs Isaac, from a blank board as in the pilot. — waiting on Isaac: 22 photos, page at `data/labels/green-mat/label-holdout.html`
+- [x] Write the reader and position interfaces into `docs/PROTOCOL.md` (§9)
 
 **Validation (gate — do not start Phase 2 until these pass):**
 - `.venv/bin/pytest -q` → `0 failed`
@@ -102,7 +102,7 @@ its accuracy a repeatable measurement.
 - `git grep -n "tracker\|emission\|synth" -- '*.py' '*.js' '*.toml'` → no matches
 
 **Handoff (do before stopping):**
-- [ ] Persist to `docs/PROTOCOL.md` and this spec's Notes: the final prompt variant, whether the grid was dropped, hold-out numbers, any photos excluded and why
+- [ ] Persist to `docs/PROTOCOL.md` and this spec's Notes: the final prompt variant, whether the grid was dropped, hold-out numbers, any photos excluded and why (interfaces and label-store layout done; the three measured items wait on the two `[F]` tasks)
 
 **Resume with:** `/clear` → `/model opus` → `/spec build planning/specs/2026-11-16-photo-positions.md`
 Next phase reads: this spec, `docs/PROTOCOL.md`, `server/app.py`, `server/storage.py`, `static/js/clock.js` — and nothing else.
@@ -239,6 +239,14 @@ grows with data, and offer it as a reader backend.
 - Long gaps are ambiguous by nature. With about three photos a game the line between them is a best guess, and the page must show it as one.
 - Reader cost at three photos a game is about $0.30 on Fable.
 - Decided 2026-11-16: one phone is clock and camera. A second-phone photo page is out of scope.
+- **Phase 1 build, 2026-11-16.** Originals are `~/Downloads/chess training full/IMG_*.HEIC` (42 photos, 5712x4284, EXIF orientation 6; the `.mov` live-photo halves are ignored). Converted with `sips` to full-resolution JPEG. 32 are on the green mat (10 pilot + 22 hold-out: 2378 2481 2483 2508 2509 2516 2518 2555 2599 2771 2776 2778 2779 2796 2798 2799 2806 2807 2808 2846 3044 3045); 10 are on wooden boards (1788 2325–2328 2404–2406 2708 3013) and went to `data/labels/wood-board/` (split `unlabelled`) for Phase 5. Session = capture date from the HEIC metadata; the sets span 2025-10-18 to 2026-11-15.
+- The pilot's truth is in the **upright** frame (OpenCV applied the EXIF rotation in `prep.py`); the reader applies `ImageOps.exif_transpose` so photo-only reads are in the same frame.
+- Photo-only sends the whole photo at 2576 px long edge (the pilot's crops were 1568). Fable 5.2 accepts 2576.
+- The pilot's per-model reads were seeded into the cache as `reads/<model>/crop-grid/`; re-scoring them with the new `read_eval` reproduces the pilot exactly (Fable 99.5 % / 8 of 10 / home 100 %; Sonnet 98.9 / 6; Opus 95.3 / 3), which checks the scorer.
+- No server-side refusal fallback on the reader, on purpose: a read silently served by another model would be scored under the wrong name. Refusal is a `ReadError`.
+- If photo-only loses by more than 0.5 points, the shipped variant becomes crop-grid, which needs a grid finder before Phase 2 can read a photo; that would pull part of Phase 5 (`engine/gridfind.py`) forward. Decide at the gate.
 - The photo hint knows only the last confirmed position and the ply count, not the current board, so its threshold is a ply count. It is meant to be easy to miss; if it is never noticed in play, raise its contrast before adding anything louder.
 
 ## Amendments
+- **2026-11-16 (Phase 1, scoring frame).** `read_eval` scores in board coordinates, not the photo frame: a diagonal photo (2378, 2481, 2483, 2799, 3045) has no well-defined "row farthest from the camera", so a photo-frame label would be arbitrary. `per-square`, `occupied-square` and `perfect-board` take the read at the best-fitting of the four orientations; `home-side` scores the reader's own call; `fen-correct` (new) is the end-to-end share. Hold-out truth is a FEN placement, entered from a blank board on a page written by the new `scripts/label_page.py` (not in Files; the Phase 5 `static/label.html` still replaces it) and merged with `--merge`. The gate thresholds are unchanged.
+- **2026-11-16 (Phase 1, removals).** `tests/test_calibrate.py` was removed with the others: it builds its frames with `synth`. `engine/calibrate.py` and `engine/rectify.py` stay (as planned) but are now covered only by `test_field_fixes.py::test_frame_checks…`. Server: `analysis.py` cut to the per-game registry plus a `finish` that reports "no reader yet"; `/camera`, the calibration push, per-press reading, manual corners and orientation matching are gone from `app.py`; corrections return 409 until the Phase 3 solver. `test_review.py` keeps payload, result, verify, lichess and finished-game tests on a fixture that writes `analysis.json` directly. `CLAUDE.md` now points at this spec (the stale `engine.evaluate`/`vision_llm` rules would have misled Phase 2).

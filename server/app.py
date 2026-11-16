@@ -2,7 +2,8 @@
 
 Contract: docs/PROTOCOL.md. The server is deliberately thin — it stores events
 and frames and forwards capture commands. All clock authority lives on the clock
-phone, all engine work lands in later phases.
+phone. Per-press move reading was removed on 2026-11-16; photo intake replaces
+the camera role in Phase 2 of planning/specs/2026-11-16-photo-positions.md.
 """
 
 from __future__ import annotations
@@ -61,11 +62,6 @@ async def index():
 @app.get("/clock")
 async def clock_page():
     return _page("clock.html")
-
-
-@app.get("/camera")
-async def camera_page():
-    return _page("camera.html")
 
 
 @app.get("/games")
@@ -152,8 +148,6 @@ async def upload_frame(game_id: str, seq: int, k: int, file: UploadFile = File(.
         if seq == 0 or seq > storage.max_seq(game_id):
             raise HTTPException(status_code=409,
                                 detail="this game is finished; start a new one")
-    if seq > 0:
-        blob = await asyncio.to_thread(analysis.match_start_orientation, game_id, blob)
     try:
         path = storage.write_frame(game_id, seq, k, blob)
     except ValueError as exc:
@@ -165,37 +159,14 @@ async def upload_frame(game_id: str, seq: int, k: int, file: UploadFile = File(.
         room, "clock",
         {"type": "frame.ok", "seq": seq, "k": k, "bytes": len(blob)},
     )
-    if seq == 0:
-        asyncio.create_task(_calibrate_and_push(game_id, room))
-    else:
-        asyncio.create_task(_track_and_push(game_id, room, seq))
     return {
         "ok": True, "seq": seq, "k": k, "bytes": len(blob),
         "path": f"frames/{path.name}",
     }
 
 
-async def _calibrate_and_push(game_id: str, room: str) -> None:
-    """Find the board and tell both phones, before the first move is played."""
-    payload = await asyncio.to_thread(analysis.calibrate_start_frame, game_id)
-    message = {"type": "calibration", **payload}
-    await hub.send(room, "camera", message)
-    await hub.send(room, "clock", {"type": "calibration", "ok": payload.get("ok", False),
-                                   "method": payload.get("method"),
-                                   "score": payload.get("score"),
-                                   "warning": (payload.get("warnings") or [None])[0]})
-
-
-async def _track_and_push(game_id: str, room: str, seq: int) -> None:
-    """Keep the move list current as the game goes on."""
-    got = await asyncio.to_thread(analysis.track_frame, game_id, seq)
-    if got.get("ok"):
-        await hub.broadcast(room, {"type": "moves", "seq": seq,
-                                   "moves": got["moves"], "flagged": got["flagged"]})
-
-
 async def _finish_and_push(game_id: str, room: str) -> None:
-    """Run the tracker to the end and hand both phones the PGN."""
+    """Read the finished game and hand both phones the PGN, once there is a reader."""
     got = await asyncio.to_thread(analysis.finish, game_id)
     if not got.get("ok"):
         await hub.broadcast(room, {"type": "analysis.error",
@@ -227,36 +198,9 @@ async def get_frame(game_id: str, seq: int, k: int):
     return FileResponse(path, media_type="image/jpeg")
 
 
-@app.post("/api/games/{game_id}/corners")
-async def api_manual_corners(game_id: str, body: dict):
-    """Adopt four corners dragged on the camera page.
-
-    The detector gets the board in all but a few per cent of start frames, and
-    when it does not there is no point failing the game over it: the players can
-    drag the quad themselves and the engine carries on.
-    """
-    if not storage.exists(game_id):
-        raise HTTPException(status_code=404, detail="unknown game")
-    corners = body.get("corners")
-    if not isinstance(corners, list) or len(corners) != 4:
-        raise HTTPException(status_code=400,
-                            detail="corners must be four [x, y] pairs, board order")
-    try:
-        payload = await asyncio.to_thread(analysis.set_manual_corners, game_id, corners)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    meta = storage.read_meta(game_id)
-    await hub.broadcast(meta["room"], {"type": "calibration", **payload})
-    # A game that ended before anyone placed the corners was refused analysis;
-    # the corners are what it was waiting for.
-    if meta.get("status") == "finished":
-        asyncio.create_task(_finish_and_push(game_id, meta["room"]))
-    return payload
-
-
 @app.get("/api/games/{game_id}/analysis")
 async def api_analysis(game_id: str):
-    """The tracked move list, its per-ply confidence and its flags."""
+    """The move list read for this game, once there is one."""
     if not storage.exists(game_id):
         raise HTTPException(status_code=404, detail="unknown game")
     saved = storage.read_json(game_id, "analysis.json")
@@ -346,7 +290,7 @@ async def api_set_result(game_id: str, body: dict):
 
 @app.post("/api/games/{game_id}/verify")
 async def api_verify(game_id: str, body: dict | None = None):
-    """Mark the move list as truth, which is what puts it in front of tune.py."""
+    """Mark the move list as truth."""
     _require(game_id)
     want = True if body is None else bool(body.get("verified", True))
     return await asyncio.to_thread(review.set_verified, game_id, want)
@@ -451,8 +395,7 @@ async def _handle_clock_event(room: str, game_id: str, msg: dict) -> None:
         seq = msg.get("seq")
         if not isinstance(seq, int):
             # A stop or flag from a stale cached page may omit seq. Losing the
-            # final frame of a game is worse than guessing its number, and the
-            # tracker tolerates an extra frame that advanced no plies.
+            # final frame of a game is worse than guessing its number.
             seq = storage.max_seq(game_id) + 1
         await hub.send(room, "camera", {"type": "capture", "seq": seq, "reason": reason})
 

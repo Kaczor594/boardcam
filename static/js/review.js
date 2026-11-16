@@ -500,7 +500,7 @@ async function load() {
 
   if (data.pending) {
     const why = data.status === 'finished'
-      ? 'The game finished but no analysis is available yet — the tracker may have failed.'
+      ? 'The game finished but its moves have not been read yet — reading from photos is being rebuilt.'
       : 'This game is still being played. Analysis appears once it finishes.';
     statusMsg.textContent = `${why} (status: ${data.status}${data.error ? `, error: ${data.error}` : ''})`;
     content.hidden = true;
