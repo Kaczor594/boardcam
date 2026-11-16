@@ -14,14 +14,15 @@ status: draft                       # draft | in-progress | done | abandoned
 The September design needs a phone on a stand photographing the board on every
 clock press. Where the games are actually played a stand is not available, so
 that design cannot be field-tested and its tracker (the unmet Phase 3 and 6
-gates) is solving a problem that no longer exists. What is available: a clock
-phone on the table and a second phone that takes a few hand-held photos per
-game, from any side, at any angle. The app has to turn each photo into a
+gates) is solving a problem that no longer exists. What is available: one phone on the table running the clock, picked up a few
+times per game to take a hand-held photo, from any side, at any angle. The app has to turn each photo into a
 position on its own, and fill in the moves between photos as well as it can.
 
 ## Solution
-Keep the clock; replace per-move capture with a "snap" page that uploads a
-full-resolution photo stamped with the clock's ply count. A reader turns each
+One phone is both clock and camera: a camera button on the clock page pauses the
+clock, opens the camera, and uploads a full-resolution photo stamped with the
+clock's ply count. When the moves since the last photo are becoming too many to
+reconstruct, the button glows faintly as a hint. A reader turns each
 photo into a FEN. The reader is a swappable backend: Claude Fable 5.2 by default
 (99.5 % of squares, 8 of 10 boards perfect in the 2026-11-16 pilot), selectable
 per game in a settings menu, with a locally trained classifier as the long-term
@@ -34,7 +35,7 @@ graph, and exports a PGN that marks which moves are inferred.
 
 ## Files
 **Existing (touched):**
-- `static/clock.html`, `static/js/clock.js` — game creation and per-game settings move here; drop capture/calibration wiring
+- `static/clock.html`, `static/js/clock.js` — game creation, per-game settings, camera button and photo hint; clock state survives a page reload; drop capture/calibration and pairing wiring
 - `static/js/clocksm.js` — unchanged; its press count is the ply count
 - `static/index.html`, `static/games.html` — entry points and game list for the new flow
 - `static/review.html`, `static/js/review.js` — rewritten around positions and lines
@@ -61,7 +62,6 @@ graph, and exports a PGN that marks which moves are inferred.
 - `engine/lines_eval.py` — scores the solver on real games cut at known plies
 - `engine/evalgraph.py` — Stockfish evaluation per ply
 - `engine/gridfind.py`, `engine/local_reader.py`, `engine/train_local.py` — Phases 5–6
-- `static/snap.html`, `static/js/snap.js` — photo phone page
 - `static/js/board.js` — board view, tap-to-fix editor, arrows
 - `static/label.html`, `static/js/label.js` — labelling tool (from the pilot page)
 - `tests/test_reader.py`, `test_position.py`, `test_lines.py`, `test_intake.py`, `test_gridfind.py`, `test_local_reader.py`
@@ -70,7 +70,7 @@ graph, and exports a PGN that marks which moves are inferred.
 | Phase | Model | Agents | Clear after | Why |
 |---|---|---|---|---|
 | 1 | Opus | none | yes | Removal plus one module; artifact on disk |
-| 2 | Opus | none | yes | Backend and phone pages; next is math |
+| 2 | Opus | none | yes | Backend and clock page; next is math |
 | 3 | Fable 5 | none | yes | New search and probability design |
 | 4 | Opus | none | yes | Frontend on a defined interface |
 | 5 | Opus | none | no | Phase 6 uses its crops directly |
@@ -112,19 +112,21 @@ A game can be created, clocked and photographed, and each photo comes back as a
 FEN that can be corrected by tapping squares.
 **Execution:** `Opus` — ordinary backend and page work. Agents: none — pieces share the wire contract.
 **Context:** **CLEAR after this phase** — Phase 3 is engine math on a different surface; it needs the stored position format only.
-- [ ] Game creation on the index/clock page; room code and QR for the photo phone
+- [ ] Game creation on the index/clock page; one phone, so the room code, QR pairing and camera role are removed
+- [ ] Clock state (times, turn, press count, paused) is saved on the phone on every change and restored on reload. iOS can discard the page while the camera is open, and today a reload resets the clock.
 - [ ] Per-game settings (before start, editable later on review): player names, rating per player (default 1350 on the chess.com scale), reader model (Fable 5.2 default; Sonnet 5.5, Opus 5.5; `local` appears in Phase 6). Stored in `meta.json`; last used values become the defaults.
-- [ ] `static/snap.html`: file input with camera capture so the phone sends the full-resolution photo; shows the returned board
-- [ ] `POST /games/{id}/photos`: store `photos/NNN.jpg`, stamp with the clock's press count and side to move at receipt, run the reader in a worker thread, write `positions.json`, push the result to both phones
+- [ ] Camera button on the clock page: pauses the clock, opens the phone camera through a file input with capture (full-resolution photo), uploads, shows the returned board. The clock stays paused until a player resumes it; cancelling the camera leaves it paused too.
+- [ ] `POST /games/{id}/photos`: store `photos/NNN.jpg`, stamp with the clock's press count and side to move at the moment of the pause, run the reader in a worker thread, write `positions.json`, return the result to the phone
 - [ ] Tap-to-fix editor (`static/js/board.js`): change a square, rotate the board, confirm. A confirmed position stores the original read beside the corrections, which is the training label for Phase 5.
 - [ ] Ply stamp is adjustable by ±1 on confirm (photo taken after the move but before the press)
 - [ ] A photo with no board, or an illegal position, is reported on the phone and can be retaken; nothing is silently accepted
+- [ ] Confirming a read must not hold up the game: the board can be confirmed later from the review page, and play resumes with one tap
 - [ ] UI per the `kaczor-design` skill; rewrite `docs/PROTOCOL.md` §§ for photos, positions, settings; update `docs/SETUP.md`
 
 **Validation (gate — do not start Phase 3 until these pass):**
 - `.venv/bin/pytest -q` → `0 failed` (includes `tests/test_intake.py` with a stubbed reader: upload → stamped position → correction → confirmed FEN)
 - `.venv/bin/python -m scripts.replay_photos data/labels/green-mat/2777.jpg --ply 24` → prints a FEN equal to the labelled one
-- Manual, on the two phones over the tunnel: create a game, press the clock 6 times, take a photo, confirm the FEN shows `ply 6` and the right side to move. Record the result in Notes.
+- Manual, on the iPhone over the tunnel: create a game, press the clock 6 times, tap the camera button (clock pauses), take a photo, confirm the FEN shows `ply 6` and the right side to move, resume, and check both times are what they were at the pause. Repeat once after force-reloading the page mid-game. Record the result in Notes.
 
 **Handoff (do before stopping):**
 - [ ] Persist to `docs/PROTOCOL.md`: the `positions.json` schema exactly as written, the settings keys, and anything iOS did that the page had to work around
@@ -144,6 +146,7 @@ most likely lines and, for every ply, how likely each candidate move is.
 - [ ] Castling rights and en passant in the resulting FENs come from the chosen path
 - [ ] `engine/evalgraph.py`: Stockfish evaluation for every ply of a line, and Stockfish's top moves at a given ply (for the engine arrows)
 - [ ] `engine/lines_eval.py`: cut real games from the chess-insights database at known plies and score the solver by gap length (4, 8, 12, 16, 24): a path found, true line is top-1, true line in top-3, share of plies where the true move is the top marginal. Evaluation games are after the cut-off; nothing is tuned on them.
+- [ ] Photo hint threshold: from the accuracy-by-gap table, the number of plies since the last confirmed photo beyond which reconstruction is no longer dependable (true line outside the top 3 more often than not, or the search no longer finishes in its time box). One number per rating band, written to config. Fitted on games before the cut-off, reported on games after.
 - [ ] Document the method and the measured table in `engine/README.md`
 
 **Validation (gate — do not start Phase 4 until these pass):**
@@ -151,6 +154,7 @@ most likely lines and, for every ply, how likely each candidate move is.
 - `.venv/bin/python -m engine.lines_eval --gaps 4,8 --games 200 --split after-cutoff` → `path-found >= 0.98`, `true-line-top3 >= 0.60` at gap 4
 - `.venv/bin/python -m engine.lines_eval --gaps 12,16,24 --games 200 --split after-cutoff` → `path-found >= 0.90`, median time per gap `<= 30 s`; top-1/top-3 recorded in Notes, no threshold (these gaps are expected to be ambiguous)
 - `.venv/bin/python -m engine.lines_eval --check-leak` → `0 evaluation games before cut-off`
+- `.venv/bin/python -m engine.lines_eval --hint-threshold` → prints one ply count per band, each between 6 and 60
 
 **Handoff (do before stopping):**
 - [ ] Persist to `engine/README.md` and Notes: the `lines.json` schema, the chosen bands, the accuracy-by-gap table, what was tried and dropped
@@ -163,6 +167,7 @@ The finished game is one page: photos with their FENs, the inferred moves
 between them, and a PGN.
 **Execution:** `Opus` — frontend and glue on interfaces that now exist. Agents: none.
 **Context:** **CLEAR after this phase** — Phases 5–6 are a separate workstream (training data and models).
+- [ ] Photo hint on the clock page: a slow, low-contrast glow on the camera button once the plies since the last photo pass the Phase 3 threshold. Only after at least one photo has been taken in the game; never while either clock is under one minute (and it goes away if one drops below); cleared by the next photo. No sound, no text, no vibration.
 - [ ] After each confirmed photo, solve the gap from the previous confirmed position (or the start) in the background and push `lines.ready`
 - [ ] Review page: step through plies on a board; photo positions marked as confirmed, plies between as inferred
 - [ ] Arrows from the current ply: derived moves in one colour with thickness by marginal probability, Stockfish's top moves in a second colour; a legend; the pair chosen from the design system and checked for contrast in light and dark
@@ -175,7 +180,8 @@ between them, and a PGN.
 **Validation (gate — do not start Phase 5 until these pass):**
 - `.venv/bin/pytest -q` → `0 failed`
 - `.venv/bin/python -m scripts.replay_game data/real/<first real game>` → writes `game.pgn` that `python -c "import chess.pgn,sys; g=chess.pgn.read_game(open(sys.argv[1])); assert not g.errors" game.pgn` accepts
-- Manual: one real game with at least three photos, played and reviewed on the phones; the PGN imports into lichess without edits. Record what was wrong in Notes.
+- `.venv/bin/pytest -q tests/test_clock_sm.py` → `0 failed` (includes the hint rule: off before the first photo, on past the threshold, off under one minute, off after a photo)
+- Manual: one real game with at least three photos, played and reviewed on the phone; the PGN imports into lichess without edits; note whether the glow was noticed and whether it distracted. Record what was wrong in Notes.
 
 **Handoff (do before stopping):**
 - [ ] Persist to `CLAUDE_HANDOFF.md`: field-test findings, open UI issues, where confirmed labels accumulate
@@ -219,7 +225,7 @@ grows with data, and offer it as a reader backend.
 
 ## Final validation
 - `.venv/bin/pytest -q` → `0 failed`
-- One real game: clock run, at least three photos, each confirmed with at most two corrected squares, lines solved for every gap, PGN imported into lichess without hand edits
+- One real game on one phone: clock run, at least three photos taken from the clock page, each confirmed with at most two corrected squares, lines solved for every gap, PGN imported into lichess without hand edits
 - `.venv/bin/python -m engine.read_eval data/labels/green-mat --split latest-sessions --model local` → runs with `ANTHROPIC_API_KEY` unset
 
 ## Notes
@@ -232,6 +238,7 @@ grows with data, and offer it as a reader backend.
 - Engines: `lc0` and `stockfish` from Homebrew; Maia weights `maia-1100…1900.pb.gz` in `data/maia/` (v1.0 release of CSSLab/maia-chess). Maia bands are on the Lichess scale; the setting is on the chess.com scale and is converted. Maia-2 and Maia-3 exist and are a later comparison, not part of this spec.
 - Long gaps are ambiguous by nature. With about three photos a game the line between them is a best guess, and the page must show it as one.
 - Reader cost at three photos a game is about $0.30 on Fable.
-- Open: whether the photo phone can also be the clock phone (pause, snap, resume) for games with one phone.
+- Decided 2026-11-16: one phone is clock and camera. A second-phone photo page is out of scope.
+- The photo hint knows only the last confirmed position and the ply count, not the current board, so its threshold is a ply count. It is meant to be easy to miss; if it is never noticed in play, raise its contrast before adding anything louder.
 
 ## Amendments
