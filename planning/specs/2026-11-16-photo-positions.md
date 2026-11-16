@@ -89,7 +89,7 @@ its accuracy a repeatable measurement.
 - [x] Delete the files listed under Removed and their tests; `pytest` green on what remains
 - [x] Move pilot data from `data/label-pilot/` to `data/labels/green-mat/` (photos + `truth.json`; stays gitignored)
 - [x] `engine/reader.py`: Claude backend from the pilot prompt; structured output; model id is a parameter, default `claude-fable-5-2`; refusal and `max_tokens` handled as errors, not empty boards. Load the `claude-api` skill first.
-- [F] Measure photo-only against photo-plus-grid on the 10 pilot photos and keep photo-only if it is within 0.5 points (it removes the grid dependency) — blocked: `ANTHROPIC_API_KEY` from `~/.zprofile` returns 401 `invalid x-api-key` (req_011Ch7LPz8rKkMLX9sro3tcT); crop-grid side is in the cache from the pilot
+- [x] Measure photo-only against photo-plus-grid on the 10 pilot photos and keep photo-only if it is within 0.5 points (it removes the grid dependency) — photo-only 99.7 % vs 99.5 %; **grid dropped** (see Notes)
 - [x] `engine/position.py`: rotate the read by White's home side, set side to move, build the FEN, flag illegal positions (king count, pawns on back ranks, more than 16 a side, side not to move in check)
 - [x] `engine/read_eval.py`: per-square, occupied-square, perfect-board and home-side accuracy, cost and seconds per photo, confusion pairs
 - [F] Label the remaining usable green-mat photos (about 20) as a hold-out the prompt is never tuned on. Needs Isaac, from a blank board as in the pilot. — waiting on Isaac: 22 photos, page at `data/labels/green-mat/label-holdout.html`
@@ -102,7 +102,7 @@ its accuracy a repeatable measurement.
 - `git grep -n "tracker\|emission\|synth" -- '*.py' '*.js' '*.toml'` → no matches
 
 **Handoff (do before stopping):**
-- [ ] Persist to `docs/PROTOCOL.md` and this spec's Notes: the final prompt variant, whether the grid was dropped, hold-out numbers, any photos excluded and why (interfaces and label-store layout done; the three measured items wait on the two `[F]` tasks)
+- [ ] Persist to `docs/PROTOCOL.md` and this spec's Notes: the final prompt variant, whether the grid was dropped, hold-out numbers, any photos excluded and why (interfaces, label-store layout, prompt variant and the grid decision done; hold-out numbers and exclusions wait on the hold-out labels)
 
 **Resume with:** `/clear` → `/model opus` → `/spec build planning/specs/2026-11-16-photo-positions.md`
 Next phase reads: this spec, `docs/PROTOCOL.md`, `server/app.py`, `server/storage.py`, `static/js/clock.js` — and nothing else.
@@ -244,7 +244,7 @@ grows with data, and offer it as a reader backend.
 - Photo-only sends the whole photo at 2576 px long edge (the pilot's crops were 1568). Fable 5.2 accepts 2576.
 - The pilot's per-model reads were seeded into the cache as `reads/<model>/crop-grid/`; re-scoring them with the new `read_eval` reproduces the pilot exactly (Fable 99.5 % / 8 of 10 / home 100 %; Sonnet 98.9 / 6; Opus 95.3 / 3), which checks the scorer.
 - No server-side refusal fallback on the reader, on purpose: a read silently served by another model would be scored under the wrong name. Refusal is a `ReadError`.
-- If photo-only loses by more than 0.5 points, the shipped variant becomes crop-grid, which needs a grid finder before Phase 2 can read a photo; that would pull part of Phase 5 (`engine/gridfind.py`) forward. Decide at the gate.
+- **Photo-only vs crop-grid, Fable 5.2, pilot split (2026-11-16):** photo-only per-square 0.997, occupied 0.991, perfect 9/10, home-side 1.000, fen-correct 0.9, $0.110 and 23 s per photo; crop-grid (pilot reads) 0.995 / 0.987 / 8/10 / 1.000 / 0.8, $0.101, 17 s. Photo-only is kept: no grid finder in the read path, and Phase 2 can read a photo as uploaded. Residual errors are bishop read as pawn (one white, one black); the queen-vs-rook miss did not recur at 2576 px. One run on 10 photos (640 squares, so 0.2 points is about one square): read it as "not worse", not as an improvement. The first attempt failed with 401 because this Claude Code session had inherited the key from before it was replaced in `~/.zprofile`; a fresh login shell's key works.
 - The photo hint knows only the last confirmed position and the ply count, not the current board, so its threshold is a ply count. It is meant to be easy to miss; if it is never noticed in play, raise its contrast before adding anything louder.
 
 ## Amendments

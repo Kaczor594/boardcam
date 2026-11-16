@@ -485,8 +485,8 @@ Two engine modules, no server wiring yet (Phase 2 adds `POST /games/{id}/photos`
 - Default variant is **photo-only**: the whole photo, no grid, no crop, so no
   grid finder is needed. `grid_image` selects the pilot's variant (a crop of the
   mat plus the same crop with a labelled grid); it needs four corners and exists
-  for comparison only. Which one ships is decided by the measurement in the
-  spec's Notes.
+  for comparison only. Photo-only ships: on the pilot it read 99.7 % of squares
+  against 99.5 % for crop-grid (Fable 5.2, spec Notes 2026-11-16).
 - `BoardRead`: `rows` (8 strings of 8, `KQRBNPkqrbnp.`, **photo frame**: row 0
   is the row of squares farthest from the camera, column 0 the leftmost),
   `home` (side of the photo where White's home rank is: `top|bottom|left|right|unknown`),
