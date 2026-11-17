@@ -44,9 +44,8 @@
         <tr>
           <th>Started</th>
           <th>Players</th>
-          <th>Room</th>
           <th>Status</th>
-          <th class="num">Frames</th>
+          <th class="num" title="confirmed / taken">Photos</th>
           <th class="num">Plies</th>
           <th>Result</th>
           <th></th>
@@ -86,7 +85,7 @@ function cell(row, text, cls) {
 async function remove(game) {
   const ok = await modal({
     title: 'Delete this game?',
-    body: `${game.frames} frames and the event log will be removed. This cannot be undone.`,
+    body: `${game.photos} photo${game.photos === 1 ? '' : 's'} and the event log will be removed. This cannot be undone.`,
     row: true,
     choices: [
       { label: 'Cancel', value: false },
@@ -113,9 +112,9 @@ async function load() {
   }
 
   rows.replaceChildren();
-  const totalFrames = games.reduce((n, g) => n + g.frames, 0);
+  const totalPhotos = games.reduce((n, g) => n + g.photos, 0);
   summary.textContent = games.length
-    ? `${games.length} game${games.length === 1 ? '' : 's'}, ${totalFrames} frames.`
+    ? `${games.length} game${games.length === 1 ? '' : 's'}, ${totalPhotos} photos.`
     : '';
   table.hidden = games.length === 0;
   empty.hidden = games.length !== 0;
@@ -132,9 +131,8 @@ async function load() {
     players.appendChild(gid);
     tr.appendChild(players);
 
-    cell(tr, g.room, 'room');
     cell(tr, g.status, `status ${g.status}`);
-    cell(tr, String(g.frames), 'num');
+    cell(tr, `${g.confirmed}/${g.photos}`, 'num');
     cell(tr, String(g.plies), 'num');
     cell(tr, g.result || '—');
 

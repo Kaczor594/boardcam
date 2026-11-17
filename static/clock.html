@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-  <title>BoardCam — clock</title>
+  <title>BoardCam clock</title>
   <link rel="stylesheet" href="/static/css/boardcam.css" />
   <style>
     html, body { height: 100vh; height: 100dvh; overflow: hidden; }
@@ -13,20 +13,17 @@
       flex-direction: column;
     }
 
-    /* ---------- join screen ---------- */
-    #join-screen {
+    /* ---------- setup screen ---------- */
+    #setup {
       flex: 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: var(--space-5);
+      overflow-y: auto;
+      padding: var(--space-5) var(--space-4) var(--space-8);
     }
-    #join-screen .card { width: 100%; max-width: 360px; }
-    #join-error {
-      color: var(--negative);
-      font-size: var(--text-sm);
-      margin-top: var(--space-3);
-    }
+    #setup .card { max-width: 440px; margin: 0 auto; }
+    .player-grid { display: grid; grid-template-columns: 1fr 6.5em; gap: var(--space-2) var(--space-3); }
+    .player-grid label { margin: 0; }
+    #setup-error { color: var(--negative); font-size: var(--text-sm); }
+    .reader-note { font-size: var(--text-xs); color: var(--fg-3); margin-top: var(--space-1); }
 
     /* ---------- app shell ---------- */
     #app {
@@ -36,13 +33,7 @@
       min-height: 0;
     }
 
-    /* ---------- settings ---------- */
-    #settings {
-      padding: var(--space-3) var(--space-4);
-      background: var(--bg-sunken);
-      border-bottom: 1px solid var(--line-1);
-    }
-    #settings .eyebrow { margin-bottom: var(--space-2); }
+    #setup .eyebrow { margin-bottom: var(--space-2); }
     #custom-fields {
       display: flex;
       gap: var(--space-3);
@@ -50,6 +41,10 @@
       max-width: 320px;
     }
     #custom-fields label { flex: 1; margin-bottom: 0; }
+    .status-strip button.linkish {
+      background: none; border: 0; padding: 0; margin: 0; font: inherit; color: inherit;
+      text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+    }
 
     /* ---------- clock zones ---------- */
     #clock-area {
@@ -127,6 +122,13 @@
     #control-bar .btn:disabled { color: var(--stone-50); border-color: var(--stone-70); }
     #control-bar #stop-btn { color: var(--terra-30); border-color: var(--terra-50); }
     #control-bar #stop-btn:hover:not(:disabled) { background: rgba(185, 111, 62, 0.14); }
+    /* The camera is the one action the bar exists for: filled, not outlined. */
+    #control-bar #camera-btn {
+      color: var(--ink); background: var(--paper-00); border-color: var(--paper-00);
+      display: inline-flex; align-items: center; gap: var(--space-2); min-height: 40px;
+    }
+    #control-bar #camera-btn:hover:not(:disabled) { background: var(--paper-20); }
+    #control-bar #camera-btn svg { width: 18px; height: 18px; }
 
     /* ---------- finished banner ---------- */
     #finished-banner, #board-banner {
@@ -144,27 +146,34 @@
       text-align: center;
     }
 
-    /* ---------- analysis panel ---------- */
-    #analysis-panel {
+    #finished-banner a { color: inherit; font-weight: 600; }
+
+    /* ---------- photo sheet ---------- */
+    #photo-sheet {
       position: fixed;
       inset: 0;
       z-index: 40;
       background: var(--bg);
       overflow-y: auto;
-      padding: var(--space-5);
+      padding: var(--space-4) var(--space-4) var(--space-8);
     }
-    #analysis-pre {
-      background: var(--bg-panel);
-      border: 1px solid var(--line-1);
-      border-radius: var(--radius-md);
-      padding: var(--space-3);
-      font-family: var(--font-mono);
+    #photo-sheet .sheet-inner { max-width: 460px; margin: 0 auto; }
+    #sheet-title { margin: 0; }
+    #sheet-meta { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--fg-2); }
+    #sheet-thumb {
+      display: block; width: 100%; max-height: 28vh; object-fit: contain;
+      background: var(--bg-sunken);
+    }
+    #sheet-reading { color: var(--fg-2); }
+    #sheet-flags, #sheet-error {
       font-size: var(--text-sm);
-      white-space: pre-wrap;
-      word-break: break-word;
-      max-height: 40vh;
-      overflow-y: auto;
+      color: var(--negative);
+      border-left: 2px solid var(--negative);
+      padding-left: var(--space-3);
     }
+    .ply-stepper { display: inline-flex; align-items: center; gap: var(--space-2); }
+    .ply-stepper .btn { min-width: 40px; padding: 0; }
+    #sheet-ply { min-width: 3.5em; text-align: center; }
 
     /* The phone lies flat between two players facing each other, so the two
        halves stay stacked in both orientations and the far half stays rotated
@@ -179,35 +188,53 @@
 </head>
 <body class="app">
 
-  <div id="join-screen">
+  <div id="setup" hidden>
     <div class="card stack">
-      <h2>Join room</h2>
-      <p class="muted">Enter the 4-character code shown on the camera phone.</p>
-      <input id="join-code" class="code" type="text" maxlength="4" inputmode="latin" autocapitalize="characters" autocomplete="off" placeholder="XXXX" />
-      <button id="join-btn" class="btn btn-primary btn-block">Join</button>
-      <div id="join-error" hidden></div>
+      <h2>New game</h2>
+
+      <div>
+        <div class="eyebrow">Time control</div>
+        <div class="chip-row" id="chip-row"></div>
+        <button type="button" class="chip" id="chip-custom" aria-pressed="false">Custom</button>
+        <div id="custom-fields" hidden>
+          <label>Minutes
+            <input id="custom-minutes" type="number" min="1" step="1" value="10" inputmode="numeric" />
+          </label>
+          <label>Increment (s)
+            <input id="custom-increment" type="number" min="0" step="1" value="5" inputmode="numeric" />
+          </label>
+        </div>
+      </div>
+
+      <div>
+        <div class="eyebrow">Players</div>
+        <div class="player-grid">
+          <label>White <input id="white-name" type="text" maxlength="40" autocomplete="off" /></label>
+          <label>Rating <input id="white-rating" type="number" min="100" max="3500" step="1" inputmode="numeric" /></label>
+          <label>Black <input id="black-name" type="text" maxlength="40" autocomplete="off" /></label>
+          <label>Rating <input id="black-rating" type="number" min="100" max="3500" step="1" inputmode="numeric" /></label>
+        </div>
+        <p class="reader-note">Ratings on the chess.com scale. They set how human the guessed moves between photos are.</p>
+      </div>
+
+      <div>
+        <label>Board reader
+          <select id="reader-model"></select>
+        </label>
+        <p class="reader-note" id="reader-note"></p>
+      </div>
+
+      <button id="start-btn" class="btn btn-primary btn-block btn-lg">Set up the clock</button>
+      <div id="setup-error" hidden></div>
+      <p class="muted" style="font-size: var(--text-sm); margin: 0;"><a href="/games">Recorded games</a></p>
     </div>
   </div>
 
   <div id="app" hidden>
     <div class="status-strip">
-      <span class="status-item"><span class="dot" id="paired-dot"></span>paired</span>
-      <span class="status-item"><span class="dot" id="frame-dot"></span><span id="frame-label">frame —</span></span>
-      <span class="status-item"><span class="dot" id="cal-dot"></span>calibration</span>
-    </div>
-
-    <div id="settings">
-      <div class="eyebrow">Time control</div>
-      <div class="chip-row" id="chip-row"></div>
-      <button type="button" class="chip" id="chip-custom" aria-pressed="false">Custom</button>
-      <div id="custom-fields" hidden>
-        <label>Minutes
-          <input id="custom-minutes" type="number" min="1" step="1" value="10" />
-        </label>
-        <label>Increment (s)
-          <input id="custom-increment" type="number" min="0" step="1" value="5" />
-        </label>
-      </div>
+      <span class="status-item"><span class="dot" id="conn-dot"></span>server</span>
+      <span class="status-item num" id="ply-label">ply 0</span>
+      <span class="status-item"><span class="dot" id="photo-dot"></span><button type="button" class="linkish num" id="photos-label">no photos</button></span>
     </div>
 
     <div id="clock-area">
@@ -220,8 +247,12 @@
 
       <div id="control-bar">
         <button type="button" class="btn" id="pause-resume-btn" disabled>Pause</button>
+        <button type="button" class="btn" id="camera-btn" aria-label="Photograph the board">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 8h3l2-2.5h6L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+          Photo
+        </button>
         <button type="button" class="btn btn-danger" id="stop-btn" disabled>Stop</button>
-        <button type="button" class="btn" id="reset-btn">Reset</button>
+        <button type="button" class="btn" id="new-btn">New</button>
       </div>
 
       <div class="zone" id="zone-white">
@@ -233,18 +264,47 @@
     </div>
   </div>
 
-  <p id="finished-banner" hidden></p>
-  <p id="board-banner" hidden>The camera has not found the board. Mark the corners on the
-  camera phone before the first move, or this game cannot be read.</p>
+  <input id="camera-input" type="file" accept="image/*" capture="environment" hidden />
 
-  <div id="analysis-panel" hidden>
-    <h2>Analysis</h2>
-    <p class="muted" id="flagged-count"></p>
-    <pre id="analysis-pre"></pre>
-    <div class="row" style="margin-top: var(--space-4);">
-      <button type="button" class="btn" id="copy-pgn-btn">Copy PGN</button>
-      <a class="btn" id="lichess-link" href="#" target="_blank" rel="noopener" hidden>Open in lichess</a>
-      <a class="btn" id="review-link" href="#" target="_blank" rel="noopener" hidden>Review &amp; correct</a>
+  <p id="finished-banner" hidden></p>
+
+  <div id="photo-sheet" hidden>
+    <div class="sheet-inner stack">
+      <div class="row">
+        <h2 id="sheet-title">Photo</h2>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-primary" id="sheet-resume">Resume play</button>
+      </div>
+      <div id="sheet-meta"></div>
+      <img id="sheet-thumb" alt="The photo just taken" />
+
+      <p id="sheet-reading" hidden></p>
+      <div id="sheet-error" hidden></div>
+
+      <div id="sheet-edit" class="stack" hidden>
+        <div id="sheet-flags" hidden></div>
+        <div id="sheet-board"></div>
+        <p class="muted" style="font-size: var(--text-sm); margin: 0;">Tap a square to change it. Squares you changed are outlined.</p>
+        <div class="row">
+          <span class="ply-stepper">
+            <button type="button" class="btn" id="ply-minus" aria-label="One ply earlier">−</button>
+            <span id="sheet-ply" class="num"></span>
+            <button type="button" class="btn" id="ply-plus" aria-label="One ply later">+</button>
+          </span>
+          <span class="spacer"></span>
+          <button type="button" class="btn" id="sheet-rotate">Rotate</button>
+          <button type="button" class="btn" id="sheet-undo">Undo fixes</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <button type="button" class="btn btn-primary" id="sheet-confirm" hidden>Confirm board</button>
+        <button type="button" class="btn" id="sheet-retry" hidden>Read again</button>
+        <button type="button" class="btn" id="sheet-retake">Retake</button>
+        <button type="button" class="btn" id="sheet-manual" hidden>Enter by hand</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="sheet-later">Later</button>
+      </div>
     </div>
   </div>
 

@@ -1,9 +1,9 @@
-"""BoardCam server: static pages, REST, and the clock/camera WebSocket bridge.
+"""BoardCam server: static pages, REST, photo intake and the clock WebSocket.
 
-Contract: docs/PROTOCOL.md. The server is deliberately thin — it stores events
-and frames and forwards capture commands. All clock authority lives on the clock
-phone. Per-press move reading was removed on 2026-11-16; photo intake replaces
-the camera role in Phase 2 of planning/specs/2026-11-16-photo-positions.md.
+Contract: docs/PROTOCOL.md. One phone is clock and camera. The server stores
+the clock's events and the photos it uploads, reads each photo into a position
+(engine.reader) and keeps the player's corrections. All clock authority lives
+on the phone.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from pathlib import Path
 from fastapi import (
     FastAPI,
     File,
+    Form,
     HTTPException,
     Query,
     Request,
@@ -25,14 +26,14 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import analysis, review, storage
+from . import analysis, photos, review, storage
 from .lichess import import_pgn
-from .models import CAPTURE_REASONS, CLOCK_EVENTS, GameConfig
+from .models import CLOCK_EVENTS, READER_MODELS, SETTING_KEYS, Confirm, GameConfig, GameSettings
 from .ws import hub, now_ms
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
-app = FastAPI(title="BoardCam", version="0.1.0")
+app = FastAPI(title="BoardCam", version="0.2.0")
 
 
 @app.middleware("http")
@@ -83,16 +84,35 @@ async def health():
 # REST
 # --------------------------------------------------------------------------
 
+@app.get("/api/settings")
+async def api_settings_defaults():
+    """The values the new-game form starts from: the last game's, else built-ins."""
+    base = GameConfig().model_dump()
+    saved = storage.read_defaults()
+    try:
+        merged = GameConfig(**{**base, **saved}).model_dump()
+    except ValueError:
+        merged = base
+    return {"defaults": merged, "reader_models": list(READER_MODELS)}
+
+
 @app.post("/games")
 async def create_game(config: GameConfig | None = None):
-    meta = storage.create_game(config or GameConfig())
-    return {
-        "game_id": meta["game_id"],
-        "room": meta["room"],
-        "created_at": meta["created_at"],
-        "initial_ms": meta["initial_ms"],
-        "increment_ms": meta["increment_ms"],
-    }
+    config = config or GameConfig()
+    meta = storage.create_game(config)
+    storage.write_defaults(config.model_dump())
+    return {k: meta[k] for k in ("game_id", "room", "created_at", "initial_ms",
+                                 "increment_ms", *SETTING_KEYS)}
+
+
+@app.patch("/api/games/{game_id}/settings")
+async def api_update_settings(game_id: str, body: GameSettings):
+    _require(game_id)
+    fields = body.model_dump(exclude_none=True)
+    meta = storage.update_meta(game_id, **fields) if fields else storage.read_meta(game_id)
+    if fields:
+        storage.write_defaults(fields)
+    return {k: meta.get(k) for k in SETTING_KEYS}
 
 
 @app.get("/api/games")
@@ -115,8 +135,8 @@ async def api_game_detail(game_id: str):
     meta = storage.read_meta(game_id)
     return {
         **meta,
-        "frames": storage.frame_inventory(game_id),
         "events": storage.read_events(game_id),
+        "positions": storage.read_positions(game_id),
         "analysis": storage.read_json(game_id, "analysis.json"),
         "calibration": storage.read_json(game_id, "calibration.json"),
     }
@@ -130,59 +150,96 @@ async def api_delete_game(game_id: str):
     return {"ok": True}
 
 
-@app.post("/games/{game_id}/frames/{seq}/{k}")
-async def upload_frame(game_id: str, seq: int, k: int, file: UploadFile = File(...)):
-    if not storage.exists(game_id):
-        raise HTTPException(status_code=404, detail="unknown game")
-    blob = await file.read()
-    # JPEG SOI marker. Cheap, and it keeps a stray HTML error page off disk.
-    if len(blob) < 4 or blob[:2] != b"\xff\xd8":
-        raise HTTPException(status_code=415, detail="expected a JPEG body")
+# --------------------------------------------------------------------------
+# Photos and positions (PROTOCOL.md §5)
+# --------------------------------------------------------------------------
 
-    # A finished game's frames are history. The one exception is the burst the
-    # final stop itself commanded, which necessarily lands after the game is
-    # marked finished — so anything at or below the last commanded seq is still
-    # welcome, and a stale camera's pre-start loop (which uploads seq 0 forever)
-    # is not.
-    if storage.read_meta(game_id).get("status") == "finished":
-        if seq == 0 or seq > storage.max_seq(game_id):
-            raise HTTPException(status_code=409,
-                                detail="this game is finished; start a new one")
+# Reads in flight. Held so the tasks are not garbage-collected, and so a read
+# survives the phone dropping its request (iOS can discard the page).
+_reads: set[asyncio.Task] = set()
+
+
+async def _read_and_push(game_id: str, n: int) -> dict:
+    entry = await asyncio.to_thread(photos.read_photo, game_id, n)
+    room = storage.read_meta(game_id)["room"]
+    await hub.send(room, "clock", {"type": "position.read", "game_id": game_id,
+                                   "photo": entry})
+    return entry
+
+
+async def _start_read(game_id: str, n: int) -> dict:
+    task = asyncio.create_task(_read_and_push(game_id, n))
+    _reads.add(task)
+    task.add_done_callback(_reads.discard)
+    # Shielded: if the phone's request is cancelled the read still finishes and
+    # lands in positions.json, where the page picks it up after a reload.
+    return await asyncio.shield(task)
+
+
+def _photo_error(exc: photos.PhotoError) -> HTTPException:
+    return HTTPException(status_code=exc.status, detail=exc.detail)
+
+
+@app.post("/games/{game_id}/photos")
+async def upload_photo(game_id: str, file: UploadFile = File(...),
+                       ply: int = Form(...), turn: str | None = Form(None),
+                       white_ms: int | None = Form(None), black_ms: int | None = Form(None),
+                       retake_of: int | None = Form(None)):
+    """Store a photo stamped with the clock's ply count, read it, return the read.
+
+    The response waits for the reader (seconds, up to minutes on a diagonal
+    photo). The same entry is pushed as ``position.read`` on the socket.
+    """
+    _require(game_id)
+    blob = await file.read()
+    if turn not in (None, "", "white", "black"):
+        raise HTTPException(status_code=400, detail="turn must be white or black")
     try:
-        path = storage.write_frame(game_id, seq, k, blob)
+        entry = await asyncio.to_thread(photos.add_photo, game_id, blob, ply=ply,
+                                        turn=turn or None, white_ms=white_ms,
+                                        black_ms=black_ms, retake_of=retake_of)
+    except photos.PhotoError as exc:
+        raise _photo_error(exc) from exc
+    return await _start_read(game_id, entry["n"])
+
+
+@app.post("/api/games/{game_id}/photos/{n}/read")
+async def reread_photo(game_id: str, n: int):
+    """Retry a read that failed for a transport reason (no new photo needed)."""
+    _require(game_id)
+    try:
+        await asyncio.to_thread(photos.mark_reading, game_id, n)
+    except photos.PhotoError as exc:
+        raise _photo_error(exc) from exc
+    return await _start_read(game_id, n)
+
+
+@app.get("/api/games/{game_id}/positions")
+async def api_positions(game_id: str):
+    _require(game_id)
+    return storage.read_positions(game_id)
+
+
+@app.get("/games/{game_id}/photos/{n}")
+async def get_photo(game_id: str, n: int):
+    _require(game_id)
+    try:
+        path = storage.photo_path(game_id, n)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    meta = storage.read_meta(game_id)
-    room = meta["room"]
-    await hub.send(
-        room, "clock",
-        {"type": "frame.ok", "seq": seq, "k": k, "bytes": len(blob)},
-    )
-    return {
-        "ok": True, "seq": seq, "k": k, "bytes": len(blob),
-        "path": f"frames/{path.name}",
-    }
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="no such photo")
+    return FileResponse(path, media_type="image/jpeg")
 
 
-async def _finish_and_push(game_id: str, room: str) -> None:
-    """Read the finished game and hand both phones the PGN, once there is a reader."""
-    got = await asyncio.to_thread(analysis.finish, game_id)
-    if not got.get("ok"):
-        await hub.broadcast(room, {"type": "analysis.error",
-                                   "error": got.get("error", "analysis failed"),
-                                   "board_not_found": bool(got.get("board_not_found"))})
-        return
-    url = storage.read_meta(game_id).get("lichess_url")
-    if url is None:
-        url = await import_pgn(got["pgn"])
-        if url:
-            storage.update_meta(game_id, lichess_url=url)
-    await hub.broadcast(room, {"type": "analysis.ready", "game_id": game_id,
-                               "pgn": got["pgn"], "lichess_url": url,
-                               "review_url": f"/review?game={game_id}",
-                               "plies": got["plies"], "flagged": got["flagged"]})
-    analysis.forget(game_id)
+@app.post("/api/games/{game_id}/photos/{n}/confirm")
+async def confirm_photo(game_id: str, n: int, body: Confirm):
+    _require(game_id)
+    try:
+        return await asyncio.to_thread(photos.confirm, game_id, n, body.rows,
+                                       body.home, body.ply)
+    except photos.PhotoError as exc:
+        raise _photo_error(exc) from exc
 
 
 @app.get("/games/{game_id}/frames/{seq}/{k}")
@@ -316,25 +373,21 @@ async def api_lichess(game_id: str):
 # WebSocket
 # --------------------------------------------------------------------------
 
-def _hello(game_id: str, room: str, role: str) -> dict:
+def _hello(game_id: str, room: str) -> dict:
     meta = storage.read_meta(game_id)
-    peer = "camera" if role == "clock" else "clock"
     return {
         "type": "hello",
-        "role": role,
+        "role": "clock",
         "game_id": game_id,
         "room": room,
         "status": meta.get("status", "ready"),
         "result": meta.get("result"),
         "seq": storage.count_plies(game_id),
-        "frames": storage.count_frames(game_id),
         "config": {
             "initial_ms": meta["initial_ms"],
             "increment_ms": meta["increment_ms"],
-            "white_name": meta.get("white_name", "White"),
-            "black_name": meta.get("black_name", "Black"),
+            **{k: meta.get(k) for k in SETTING_KEYS},
         },
-        "peer_connected": hub.is_connected(room, peer),
         "t": now_ms(),
     }
 
@@ -371,7 +424,7 @@ async def _handle_clock_event(room: str, game_id: str, msg: dict) -> None:
                                        "result": meta.get("result")})
         return
 
-    stored = storage.append_event(game_id, msg)
+    storage.append_event(game_id, msg)
 
     fields: dict = {}
     status = _status_for(event_type, "")
@@ -384,33 +437,18 @@ async def _handle_clock_event(room: str, game_id: str, msg: dict) -> None:
         side = msg.get("side")
         fields["result"] = "0-1" if side == "white" else "1-0"
     if event_type == "clock.config":
-        for key in ("initial_ms", "increment_ms", "white_name", "black_name"):
+        for key in ("initial_ms", "increment_ms"):
             if key in msg:
                 fields[key] = msg[key]
     if fields:
         storage.update_meta(game_id, **fields)
-
-    reason = CAPTURE_REASONS.get(event_type)
-    if reason:
-        seq = msg.get("seq")
-        if not isinstance(seq, int):
-            # A stop or flag from a stale cached page may omit seq. Losing the
-            # final frame of a game is worse than guessing its number.
-            seq = storage.max_seq(game_id) + 1
-        await hub.send(room, "camera", {"type": "capture", "seq": seq, "reason": reason})
-
-    # The camera mirrors clock state for its own status strip.
-    await hub.send(room, "camera", {"type": "clock.event", "event": stored})
-
-    if event_type in ("clock.stop", "clock.flag"):
-        asyncio.create_task(_finish_and_push(game_id, room))
 
 
 @app.websocket("/ws/{room}")
 async def websocket_endpoint(
     websocket: WebSocket,
     room: str,
-    role: str = Query(..., pattern="^(clock|camera)$"),
+    role: str = Query("clock", pattern="^clock$"),
 ):
     room = room.upper()
     meta = storage.find_by_room(room)
@@ -421,11 +459,9 @@ async def websocket_endpoint(
 
     await websocket.accept()
     await hub.join(room, game_id, role, websocket)
-    peer = "camera" if role == "clock" else "clock"
 
     try:
-        await websocket.send_json(_hello(game_id, room, role))
-        await hub.send(room, peer, {"type": "peer", "role": role, "connected": True})
+        await websocket.send_json(_hello(game_id, room))
 
         while True:
             raw = await websocket.receive_text()
@@ -439,23 +475,13 @@ async def websocket_endpoint(
 
             if msg_type == "ping":
                 await websocket.send_json({"type": "pong", "t": now_ms()})
-            elif msg_type in CLOCK_EVENTS and role == "clock":
+            elif msg_type in CLOCK_EVENTS:
                 await _handle_clock_event(room, game_id, msg)
-            elif msg_type == "camera.status" and role == "camera":
-                status = {k: msg.get(k) for k in ("streaming", "w", "h", "error")}
-                r = hub.peek(room)
-                if r is not None:
-                    r.camera_status = status
-                await hub.send(
-                    room, "clock",
-                    {"type": "peer", "role": "camera", "connected": True, **status},
-                )
             # Unknown types are ignored on purpose: later phases add events.
     except WebSocketDisconnect:
         pass
     finally:
         await hub.leave(room, role, websocket)
-        await hub.send(room, peer, {"type": "peer", "role": role, "connected": False})
 
 
 # Static assets last so the routes above win.

@@ -1,6 +1,7 @@
 # BoardCam setup
 
-One-time setup on the Mac, then a two-minute routine before each game.
+One-time setup on the Mac, then a one-minute routine before each game. One phone
+runs the clock and takes the photos.
 
 ## 1. One-time: the Mac
 
@@ -12,8 +13,9 @@ cd ~/claude-projects/boardcam
 
 ## 2. One-time: the ngrok static domain
 
-Phones will not give a web page camera access over plain HTTP, so the server
-has to be reachable over HTTPS. ngrok's free tier includes **one reserved
+The phone reaches the Mac through an HTTPS tunnel, so the clock works away from
+home Wi-Fi and the camera input is allowed (mobile browsers restrict it on plain
+HTTP). ngrok's free tier includes **one reserved
 static domain**, which means the phones get the same URL every game instead of
 a fresh random one.
 
@@ -34,117 +36,60 @@ Click through it **once per phone, per browser session** before the game
 starts. The app's own requests set `ngrok-skip-browser-warning: 1` so uploads
 and the WebSocket are never intercepted; only the initial navigation is.
 
-If the click-through becomes annoying, the documented alternative is a
-Cloudflare Tunnel, which has no interstitial but needs a domain you own.
+If the click-through becomes annoying, ## 3. One-time: the reader's API key
 
-## 3. Before each game
+Photos are read by Claude (Fable 5.2 by default). The server takes the key from
+`ANTHROPIC_API_KEY`; keep it in `~/.zprofile` and start the server from a new
+terminal after changing it (a shell started before the change still has the old
+key, which shows up as `api_401` on the phone). `scripts/serve.sh` refuses to
+start without it.
+
+## 4. Before each game
 
 ```bash
 cd ~/claude-projects/boardcam && scripts/serve.sh
 ```
 
-It prints the two URLs. Then:
+It prints the URL. Then, on the phone:
 
-1. **Camera phone first.** Open `/camera`, tap "Start camera". It creates the
-   game and shows a 4-character room code and a QR code.
-2. **Clock phone second.** Scan the QR, or open `/clock` and type the code.
-   The camera page's "clock" dot turns green.
-3. Check the preview: the board should **fill most of the frame**, with a little
-   room above its far edge and as little floor as possible (§4).
-4. Set the pieces up, then tap **"Board is set"** on the camera phone. This
-   freezes the start-position photograph.
+1. Open `/clock`. With no game in progress it shows **New game**: time control,
+   both players' names and ratings (chess.com scale, default 1350), and the
+   board reader. The last game's values are filled in.
+2. Tap **Set up the clock**, put the phone beside the board, and White presses
+   first, as on any clock.
+3. **To photograph the board**, tap **Photo**. The clock pauses at once, so the
+   time spent framing the shot is nobody's. Take the photo from wherever you
+   sit, the whole board in frame. Cancelling the camera leaves the clock paused.
+4. The photo uploads and the board comes back as a diagram, usually in under a
+   minute (a photo taken across a corner can take three). You do not have to
+   wait: **Resume play** is always one tap, and the board waits for you.
+5. To fix a read, tap a square and choose the piece; **Rotate** if White's side
+   is wrong; **−/+** if the photo was taken after a move but before its press.
+   **Confirm board** stores it. An impossible position (two white kings, a pawn
+   on the back rank, …) is refused with the reason; fix it or **Retake**.
+6. At the end, **Stop** and record the result, then take a photo of the final
+   position. Boards skipped during play are confirmed later on the review page
+   (`/games` → the game).
 
-   It matters more than it looks. Until it is tapped the start frame is
-   replaced every two seconds, and the clock's first press comes *after* White
-   has moved — so without the tap the engine's "initial position" already has a
-   move in it, and every ply after that is read against the wrong board.
-5. Play. White presses first, after white's move.
-6. Press **Stop** and pick the result. The last position is photographed even
-   if the final move was never clocked.
+Three or four photos a game is the intended rate: one in the opening, one or
+two in the middlegame, and the final position.
 
-The Mac must stay awake and on the same internet connection for the whole
-game. `caffeinate -i scripts/serve.sh` keeps it from sleeping.
+### If the page reloads
 
-## 4. Phone placement
+iOS can discard the page while the camera is open, and a reload used to reset
+the clock. The clock now saves its state on the phone on every press, pause and
+resume, and comes back exactly where it was: a paused clock with the paused
+times, a running one with the time that passed charged to the side to move.
+A photo whose upload was cut off by the reload is lost; take it again. A read
+that was already running on the server finishes and appears on the phone.
 
-This is the part that decides whether the engine works.
+## 5. Troubleshooting
 
-- **Put the camera phone on the side of the board**, perpendicular to the two
-  players, not behind either of them. The background above the far edge is then
-  a static wall or table rather than a moving opponent.
-- **As high as the stand allows.** Elevation is the single most valuable
-  variable: at a shallow angle a piece hides up to three squares behind it.
-  The engine is built and tested at roughly 30° above the board plane
-  (about 2 ft up, 3–4 ft to the side), so 30° works — but every extra 10°
-  makes it easier.
-- **Fill the frame with the board.** A little room above the far edge, and as
-  little of the surroundings as the stand allows. This is what decides whether
-  automatic calibration works at all: the detector looks for the most
-  convincing set of nine evenly spaced parallel lines in the picture, and a
-  **hardwood floor or a planked table is a better grid than a chessboard** —
-  its lines are longer, straighter and higher contrast than a square edge. On
-  the first real game the board filled about 15 % of the frame and every
-  candidate the detector produced was on the floorboards. Cropped to the board,
-  the same photograph nearly passed.
-- Portrait and landscape both work; pick whichever makes the board biggest.
-  Landscape usually wins from the side, since the board is wider than it is
-  deep in the picture. The detector now looks for the checkered middle of the
-  board rather than straight lines, so floorboards no longer fool it, but
-  pixels on the board still decide how well pieces can be told apart.
-- The camera page warns before the game if **part of the picture is black**
-  (something on the stand in front of the lens — two of the three evening
-  field-test games lost the lower 45 % of the frame to it) or if **the board is
-  small** (squares under 50 px).
-- Hands at rest, the players and captured pieces are only a problem if they sit
-  *on* the board area.
-- **Put the clock phone and the captured pieces outside the board rectangle.**
-- **Do not move the stand mid-game.** A small bump is tolerated; a
-  repositioning is not.
-- Even, diffuse light. A single hard lamp across the board throws long shadows
-  that look like pieces.
-
-## 5. During the game
-
-- Keep the camera page **in the foreground**. iOS Safari pauses a camera stream
-  on a backgrounded tab. The page holds a screen wake lock and re-acquires it
-  when it comes back to the front, but it cannot fight a locked phone.
-- The camera page's "frame" counter should tick on every clock press. If it
-  stops, the camera phone lost the socket — it reconnects on its own within a
-  few seconds; nothing needs restarting.
-- Pausing the clock does not photograph anything. Adjust a leaning piece during
-  a pause and the engine will never see it.
-
-## 6. If calibration fails
-
-The camera page opens a corner panel when it cannot find the board. Drag each
-handle to the **corner of the chequered area** it names, not to the middle of a
-square: `a1` is White's near-left corner, then `h1`, `h8`, `a8` going round. The
-small red dot inside each ring is the point that counts. Getting `a1` right is
-what tells the engine which way round the board is.
-
-Corners placed by hand are final — the pre-start re-detection will not overwrite
-them, and the panel will not reappear.
-
-Until the board is found the panel cannot be dismissed, only retaken ("Retake
-start photo", before the first press) or answered. A game played without a
-found board is **not analysed** — the clock phone says so before the first
-move. If one is played anyway, mark the corners afterwards on the camera page
-and the game is analysed then.
-
-## 7. After the game
-
-The clock phone shows the PGN with a copy button, a lichess import link and a
-link to the review page. Everything is also on the Mac under
-`data/games/<game_id>/`, and `/review?game=<id>` is where a wrong ply gets
-fixed.
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
+| Symptom | Likely cause | Fix |
 |---|---|---|
-| Camera page shows an ngrok warning instead of the app | Interstitial not clicked through | Tap "Visit site" once |
-| "Start camera" does nothing | `getUserMedia` needs a user gesture and HTTPS | Confirm the URL is `https://`, tap the button directly |
-| Stream freezes mid-game | Page was backgrounded | Bring it to the front; tap "Restart camera" if the dot is red |
-| Clock says "not paired" | Camera socket dropped | Wait ~5 s for reconnect; reload the camera page if it persists |
-| `BOARDCAM_DOMAIN is not set` | Env var missing | See §2, then open a new terminal |
-| Frame counter stuck at 0 | Uploads failing | Check the camera page's error line; usually the tunnel died |
+| ngrok warning page instead of the app | Interstitial not clicked through | Tap "Visit site" once |
+| Photo shows `api_401` | The server started with an old API key | Restart `scripts/serve.sh` from a new terminal |
+| Photo shows `rate_limited` or `connection` | The reader is busy or unreachable | **Read again** on the photo; no new photo needed |
+| Photo shows `no_board` or `max_tokens` | The board was not in frame, or the shot is hard to read | **Retake** from one side of the board |
+| "server" dot red | Tunnel or server down | The clock keeps running; photos wait until it is back |
+| Clock back at 10:00 after a reload | Private browsing (no local storage) | Use a normal Safari tab |

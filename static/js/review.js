@@ -499,10 +499,9 @@ async function load() {
   }
 
   if (data.pending) {
-    const why = data.status === 'finished'
-      ? 'The game finished but its moves have not been read yet — reading from photos is being rebuilt.'
-      : 'This game is still being played. Analysis appears once it finishes.';
-    statusMsg.textContent = `${why} (status: ${data.status}${data.error ? `, error: ${data.error}` : ''})`;
+    // Moves between photos come from the line solver (photo-positions spec,
+    // Phase 3); until then the photos section above is the whole review.
+    statusMsg.textContent = 'The moves between photos are not inferred yet.';
     content.hidden = true;
     return;
   }

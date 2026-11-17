@@ -20,7 +20,6 @@ class Room:
     room: str
     game_id: str
     sockets: dict[str, WebSocket] = field(default_factory=dict)
-    camera_status: dict = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -63,8 +62,6 @@ class Hub:
             # socket must not be evicted by the replaced one's cleanup.
             if r.sockets.get(role) is ws:
                 r.sockets.pop(role, None)
-                if role == "camera":
-                    r.camera_status = {}
             empty = not r.sockets
         if empty:
             self._rooms.pop(room, None)

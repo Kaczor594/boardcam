@@ -1,5 +1,5 @@
 /* Shared client helpers: reconnecting WebSocket, fetch wrapper, wake lock,
-   modals, toasts. Both phone pages import from here.
+   modals, toasts. The clock, games and review pages import from here.
    Protocol: docs/PROTOCOL.md */
 
 export const NGROK_HEADER = { 'ngrok-skip-browser-warning': '1' };
@@ -17,8 +17,10 @@ export async function api(path, { method = 'GET', body, headers = {} } = {}) {
   if (!resp.ok) {
     let detail = resp.statusText;
     try { detail = (await resp.json()).detail ?? detail; } catch { /* not JSON */ }
-    const err = new Error(`${resp.status} ${detail}`);
+    const text = typeof detail === 'string' ? detail : (detail.message || JSON.stringify(detail));
+    const err = new Error(`${resp.status} ${text}`);
     err.status = resp.status;
+    err.detail = detail;          // structured detail (e.g. {message, flags}) when the server sent one
     throw err;
   }
   const type = resp.headers.get('content-type') || '';
@@ -180,13 +182,6 @@ export function setDot(el, cls) {
   if (cls) el.classList.add(cls);
 }
 
-export function pulseDot(el) {
-  if (!el) return;
-  el.classList.remove('pulse');
-  void el.offsetWidth; // restart the animation
-  el.classList.add('pulse');
-}
-
 let toastTimer = null;
 export function toast(text, ms = 2600) {
   let el = document.querySelector('.toast');
@@ -276,7 +271,3 @@ export function formatClkTag(ms) {
   return `${h}:${String(m).padStart(2, '0')}:${s}`;
 }
 
-/** Room code from ?room=, uppercased, or ''. */
-export function roomFromUrl() {
-  return (new URLSearchParams(location.search).get('room') || '').toUpperCase().trim();
-}

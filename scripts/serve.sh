@@ -4,9 +4,8 @@
 #   scripts/serve.sh              # tunnel on $BOARDCAM_DOMAIN
 #   scripts/serve.sh --local      # no tunnel, http://<LAN ip>:8010 only
 #
-# HTTPS is not optional: mobile browsers refuse getUserMedia on plain HTTP
-# from anything but localhost, so the camera page needs the tunnel (or a LAN
-# address you have already trusted a certificate for).
+# The phone runs the clock and takes photos over the tunnel; photos are read by
+# Claude, so ANTHROPIC_API_KEY must be set (docs/SETUP.md §3).
 
 set -euo pipefail
 
@@ -23,6 +22,11 @@ if [[ ! -x .venv/bin/uvicorn ]]; then
 fi
 
 mkdir -p data/games
+
+if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+  echo "ANTHROPIC_API_KEY is not set; photos could not be read. See docs/SETUP.md §3." >&2
+  exit 1
+fi
 
 if [[ $LOCAL_ONLY -eq 0 ]]; then
   if ! command -v ngrok >/dev/null 2>&1; then
@@ -61,7 +65,7 @@ fi
 if [[ $LOCAL_ONLY -eq 1 ]]; then
   LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo 127.0.0.1)
   echo
-  echo "  BoardCam (local only, no HTTPS — the camera page will not work on a phone)"
+  echo "  BoardCam (local only, no HTTPS)"
   echo "  http://$LAN_IP:$PORT"
   echo
   wait "$UVICORN_PID"
@@ -85,12 +89,10 @@ cat <<EOF
 
   BoardCam is up.
 
-    Camera phone (open first):  $URL/camera
-    Clock phone  (join second): $URL/clock
-    Games on the Mac:           $URL/games
+    Clock and camera (phone): $URL/clock
+    Games and review:         $URL/games
 
-  Both phones click through the ngrok warning page once per browser session.
-  Keep the camera page in the foreground for the whole game.
+  The phone clicks through the ngrok warning page once per browser session.
 
 EOF
 

@@ -36,24 +36,25 @@
 <main class="wrap">
   <p class="eyebrow">BoardCam</p>
   <h1>Record the game, not the moves</h1>
-  <p class="prose muted">One phone runs the clock. A second phone on the stand photographs
-  the board on every press. The game comes back as a PGN.</p>
+  <p class="prose muted">One phone runs the clock. A few times a game, pause it and photograph
+  the board from wherever you sit. Each photo is read into a position you can fix by tapping
+  squares; the moves between photos are filled in afterwards.</p>
 
   <div class="role-grid" style="margin-top: var(--space-8);">
-    <a class="role" href="/camera">
-      <p class="order">Open first</p>
-      <h2>Camera</h2>
-      <p>The phone on the stand. Creates the game and shows the code the clock phone joins with.</p>
-    </a>
     <a class="role" href="/clock">
-      <p class="order">Open second</p>
+      <p class="order">Play</p>
       <h2>Clock</h2>
-      <p>The phone between the players. Runs the clock and triggers every photograph.</p>
+      <p>Opens the game in progress on this phone, or sets up a new one.</p>
+    </a>
+    <a class="role" href="/games">
+      <p class="order">Afterwards</p>
+      <h2>Games</h2>
+      <p>Recorded games, their photos and positions. Confirm boards you skipped during play.</p>
     </a>
   </div>
 
   <footer>
-    <a href="/games">Recorded games</a> · Setup notes are in <span class="num">docs/SETUP.md</span>
+    <a href="/clock?new">New game</a> · Setup notes are in <span class="num">docs/SETUP.md</span>
   </footer>
 </main>
 </body>

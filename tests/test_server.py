@@ -1,21 +1,13 @@
-"""Phase 1 gate: the physical workflow end to end, with no engine.
+"""The one-phone server surface: game creation, settings, the clock socket.
 
-Covers pairing, the press → capture → upload → ack round trip, event
-persistence, frame storage, and reconnect-replaces-stale-socket.
+Photo intake has its own file (tests/test_intake.py). There is no camera role
+any more: one phone is clock and camera (photo-positions spec, Phase 2).
 """
 
 from __future__ import annotations
 
-import io
-import json
-import os
-import time
-
 import pytest
 from fastapi.testclient import TestClient
-
-# Point storage at a temp tree before the app imports it.
-os.environ.setdefault("BOARDCAM_DATA", "")
 
 
 @pytest.fixture()
@@ -28,11 +20,6 @@ def client(tmp_path, monkeypatch):
     assert storage.data_root() == tmp_path.resolve()
     with TestClient(app_module.app) as c:
         yield c
-
-
-def jpeg_bytes(size: int = 800) -> bytes:
-    """A body that passes the SOI check without pulling in an encoder."""
-    return b"\xff\xd8\xff\xe0" + b"\x00" * size + b"\xff\xd9"
 
 
 def make_game(client, **config) -> dict:
@@ -50,22 +37,80 @@ def drain(ws, wanted: str, limit: int = 12) -> dict:
     raise AssertionError(f"never saw {wanted!r}")
 
 
-# ---------------------------------------------------------------- pairing
+# ------------------------------------------------------- creation, settings
 
-def test_create_game_returns_room_and_id(client):
+def test_create_game_returns_id_and_settings(client):
     game = make_game(client, initial_ms=600_000, increment_ms=5_000)
     assert len(game["room"]) == 4
-    assert game["room"].isupper()
-    assert game["initial_ms"] == 600_000
-    assert game["increment_ms"] == 5_000
+    assert game["initial_ms"] == 600_000 and game["increment_ms"] == 5_000
+    assert game["white_rating"] == 1350 and game["black_rating"] == 1350
+    assert game["reader_model"] == "claude-fable-5-2"
 
-    by_room = client.get(f"/api/games/by-room/{game['room']}")
-    assert by_room.status_code == 200
-    assert by_room.json()["game_id"] == game["game_id"]
+    from server import storage
+    meta = storage.read_meta(game["game_id"])
+    assert meta["reader_model"] == "claude-fable-5-2"
+    assert (storage.game_dir(game["game_id"]) / "photos").is_dir()
 
-    # Lookup is case-insensitive: the clock phone's input may be lowercase.
-    assert client.get(f"/api/games/by-room/{game['room'].lower()}").status_code == 200
-    assert client.get("/api/games/by-room/ZZZZ").status_code == 404
+
+def test_last_used_settings_become_the_defaults(client):
+    first = client.get("/api/settings").json()
+    assert first["defaults"]["white_rating"] == 1350
+    assert first["reader_models"] == ["claude-fable-5-2", "claude-sonnet-5-5", "claude-opus-5-5"]
+
+    make_game(client, white_name="Isaac", black_name="Friend", white_rating=1500,
+              black_rating=1200, reader_model="claude-sonnet-5-5", initial_ms=300_000,
+              increment_ms=0)
+    d = client.get("/api/settings").json()["defaults"]
+    assert (d["white_name"], d["black_name"]) == ("Isaac", "Friend")
+    assert (d["white_rating"], d["black_rating"]) == (1500, 1200)
+    assert d["reader_model"] == "claude-sonnet-5-5"
+    assert (d["initial_ms"], d["increment_ms"]) == (300_000, 0)
+
+
+def test_settings_are_editable_after_creation(client):
+    game = make_game(client)
+    gid = game["game_id"]
+    resp = client.patch(f"/api/games/{gid}/settings",
+                        json={"black_name": "Anna", "black_rating": 1720,
+                              "reader_model": "claude-opus-5-5"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["black_name"] == "Anna"
+
+    from server import storage
+    meta = storage.read_meta(gid)
+    assert meta["black_rating"] == 1720 and meta["reader_model"] == "claude-opus-5-5"
+    assert meta["white_name"] == "White"            # untouched keys stay
+
+    assert client.patch(f"/api/games/{gid}/settings",
+                        json={"reader_model": "gpt-4"}).status_code == 422
+    assert client.patch(f"/api/games/{gid}/settings",
+                        json={"white_rating": 99_999}).status_code == 422
+
+
+def test_bad_settings_refuse_creation(client):
+    assert client.post("/games", json={"reader_model": "nope"}).status_code == 422
+    assert client.post("/games", json={"white_rating": 5}).status_code == 422
+
+
+# ------------------------------------------------------------- the socket
+
+def test_clock_socket_says_hello_with_settings(client):
+    game = make_game(client, white_name="Isaac")
+    with client.websocket_connect(f"/ws/{game['room']}?role=clock") as clk:
+        hello = clk.receive_json()
+        assert hello["type"] == "hello" and hello["game_id"] == game["game_id"]
+        assert hello["config"]["white_name"] == "Isaac"
+        assert hello["config"]["reader_model"] == "claude-fable-5-2"
+        assert hello["seq"] == 0
+
+
+def test_role_defaults_to_clock_and_camera_is_gone(client):
+    game = make_game(client)
+    with client.websocket_connect(f"/ws/{game['room']}") as clk:
+        assert clk.receive_json()["type"] == "hello"
+    with pytest.raises(Exception):
+        with client.websocket_connect(f"/ws/{game['room']}?role=camera") as cam:
+            cam.receive_json()
 
 
 def test_unknown_room_is_refused_at_the_socket(client):
@@ -74,195 +119,47 @@ def test_unknown_room_is_refused_at_the_socket(client):
             ws.receive_json()
 
 
-def test_both_roles_see_each_other(client):
+def test_clock_events_are_persisted_and_set_status(client):
     game = make_game(client)
-    room = game["room"]
-    with client.websocket_connect(f"/ws/{room}?role=camera") as cam:
-        hello = cam.receive_json()
-        assert hello["type"] == "hello"
-        assert hello["role"] == "camera"
-        assert hello["peer_connected"] is False
-        assert hello["config"]["initial_ms"] == 600_000
+    gid = game["game_id"]
+    with client.websocket_connect(f"/ws/{game['room']}?role=clock") as clk:
+        clk.receive_json()
+        clk.send_json({"type": "clock.start", "seq": 1, "side": "white",
+                       "white_ms": 600_000, "black_ms": 600_000, "t": 1})
+        clk.send_json({"type": "clock.press", "seq": 2, "side": "black",
+                       "white_ms": 598_000, "black_ms": 597_000, "t": 2})
+        clk.send_json({"type": "clock.pause", "t": 3})
+        clk.send_json({"type": "ping"})
+        drain(clk, "pong")
 
-        with client.websocket_connect(f"/ws/{room}?role=clock") as clk:
-            clock_hello = clk.receive_json()
-            assert clock_hello["type"] == "hello"
-            assert clock_hello["peer_connected"] is True
+        from server import storage
+        assert storage.read_meta(gid)["status"] == "paused"
+        clk.send_json({"type": "clock.stop", "ply": 2, "result": "1-0", "t": 4})
+        clk.send_json({"type": "ping"})
+        drain(clk, "pong")
 
-            peer = drain(cam, "peer")
-            assert peer["role"] == "clock" and peer["connected"] is True
-
-
-# ------------------------------------------------------- press → capture
-
-def test_press_reaches_the_camera_quickly(client):
-    game = make_game(client)
-    room = game["room"]
-    with client.websocket_connect(f"/ws/{room}?role=camera") as cam:
-        cam.receive_json()
-        with client.websocket_connect(f"/ws/{room}?role=clock") as clk:
-            clk.receive_json()
-            drain(cam, "peer")
-
-            t0 = time.perf_counter()
-            clk.send_json({
-                "type": "clock.start", "seq": 1, "side": "white",
-                "white_ms": 600_000, "black_ms": 600_000, "t": time.time() * 1000,
-            })
-            cap = drain(cam, "capture")
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-
-            assert cap["seq"] == 1
-            assert cap["reason"] == "start"
-            assert elapsed_ms < 200, f"capture took {elapsed_ms:.0f} ms"
-
-            clk.send_json({
-                "type": "clock.press", "seq": 2, "side": "black",
-                "white_ms": 598_000, "black_ms": 597_000, "t": time.time() * 1000,
-            })
-            cap2 = drain(cam, "capture")
-            assert cap2["seq"] == 2 and cap2["reason"] == "press"
-
-    from server import storage
-    events = storage.read_events(game["game_id"])
-    assert [e["type"] for e in events] == ["clock.start", "clock.press"]
+    events = storage.read_events(gid)
+    assert [e["type"] for e in events] == ["clock.start", "clock.press", "clock.pause",
+                                           "clock.stop"]
     assert all("server_t" in e for e in events)
-    assert storage.read_meta(game["game_id"])["status"] == "running"
-
-
-def test_pause_and_resume_do_not_capture(client):
-    game = make_game(client)
-    room = game["room"]
-    with client.websocket_connect(f"/ws/{room}?role=camera") as cam:
-        cam.receive_json()
-        with client.websocket_connect(f"/ws/{room}?role=clock") as clk:
-            clk.receive_json()
-            drain(cam, "peer")
-            clk.send_json({"type": "clock.pause", "t": time.time() * 1000})
-            clk.send_json({"type": "clock.resume", "t": time.time() * 1000})
-            clk.send_json({
-                "type": "clock.press", "seq": 1, "side": "white",
-                "white_ms": 1, "black_ms": 1, "t": time.time() * 1000,
-            })
-            # The only capture that arrives is the press, proving the two
-            # clock-state events produced none.
-            cap = drain(cam, "capture")
-            assert cap["reason"] == "press" and cap["seq"] == 1
-
-    from server import storage
-    types = [e["type"] for e in storage.read_events(game["game_id"])]
-    assert types == ["clock.pause", "clock.resume", "clock.press"]
-
-
-def test_stop_captures_a_final_frame_and_sets_result(client):
-    game = make_game(client)
-    room = game["room"]
-    with client.websocket_connect(f"/ws/{room}?role=camera") as cam:
-        cam.receive_json()
-        with client.websocket_connect(f"/ws/{room}?role=clock") as clk:
-            clk.receive_json()
-            drain(cam, "peer")
-            clk.send_json({
-                "type": "clock.stop", "seq": 7, "result": "1-0",
-                "t": time.time() * 1000,
-            })
-            cap = drain(cam, "capture")
-            assert cap["seq"] == 7 and cap["reason"] == "stop"
-
-    from server import storage
-    meta = storage.read_meta(game["game_id"])
+    meta = storage.read_meta(gid)
     assert meta["status"] == "finished" and meta["result"] == "1-0"
 
+    # A reconnecting clock learns the press count, so its numbering continues.
+    with client.websocket_connect(f"/ws/{game['room']}?role=clock") as clk:
+        hello = clk.receive_json()
+        assert hello["seq"] == 2 and hello["status"] == "finished"
 
-# ------------------------------------------------------------- uploads
-
-def test_frame_upload_acks_the_clock_and_lands_on_disk(client):
-    game = make_game(client)
-    gid, room = game["game_id"], game["room"]
-    with client.websocket_connect(f"/ws/{room}?role=clock") as clk:
-        clk.receive_json()
-
-        for k in range(3):
-            resp = client.post(
-                f"/games/{gid}/frames/3/{k}",
-                files={"file": (f"f{k}.jpg", io.BytesIO(jpeg_bytes()), "image/jpeg")},
-            )
-            assert resp.status_code == 200, resp.text
-            body = resp.json()
-            assert body["seq"] == 3 and body["k"] == k
-            assert body["path"] == f"frames/0003_{k}.jpg"
-
-            ack = drain(clk, "frame.ok")
-            assert ack["seq"] == 3 and ack["k"] == k and ack["bytes"] > 0
-
-    from server import storage
-    for k in range(3):
-        assert storage.frame_path(gid, 3, k).exists()
-    assert storage.frame_inventory(gid) == [{"seq": 3, "k": [0, 1, 2]}]
-
-    served = client.get(f"/games/{gid}/frames/3/0")
-    assert served.status_code == 200
-    assert served.headers["content-type"] == "image/jpeg"
-    assert client.get(f"/games/{gid}/frames/9/0").status_code == 404
-
-
-def test_frame_zero_is_overwritten_not_appended(client):
-    game = make_game(client)
-    gid = game["game_id"]
-    for size in (400, 900, 1500):
-        resp = client.post(
-            f"/games/{gid}/frames/0/0",
-            files={"file": ("f.jpg", io.BytesIO(jpeg_bytes(size)), "image/jpeg")},
-        )
-        assert resp.status_code == 200
-
-    from server import storage
-    assert storage.frame_inventory(gid) == [{"seq": 0, "k": [0]}]
-    assert storage.frame_path(gid, 0, 0).stat().st_size == 1500 + 6
-
-
-def test_non_jpeg_and_unknown_game_are_refused(client):
-    game = make_game(client)
-    gid = game["game_id"]
-    bad = client.post(
-        f"/games/{gid}/frames/1/0",
-        files={"file": ("x.html", io.BytesIO(b"<html>ngrok</html>"), "text/html")},
-    )
-    assert bad.status_code == 415
-
-    missing = client.post(
-        "/games/20200101-000000-abcd/frames/1/0",
-        files={"file": ("f.jpg", io.BytesIO(jpeg_bytes()), "image/jpeg")},
-    )
-    assert missing.status_code == 404
-
-    traversal = client.get("/api/games/..%2f..%2fetc")
-    assert traversal.status_code == 404
-
-
-# ------------------------------------------------------------ reconnect
 
 def test_rejoining_replaces_the_stale_socket(client):
     game = make_game(client)
     room = game["room"]
-    with client.websocket_connect(f"/ws/{room}?role=camera") as cam:
-        cam.receive_json()
-        with client.websocket_connect(f"/ws/{room}?role=clock") as first:
-            first.receive_json()
-            drain(cam, "peer")
-
-            # Same role joins again: the new socket must win.
-            with client.websocket_connect(f"/ws/{room}?role=clock") as second:
-                hello = second.receive_json()
-                assert hello["type"] == "hello"
-
-                # The replacement, not the replaced socket, receives the press ack.
-                client.post(
-                    f"/games/{game['game_id']}/frames/1/0",
-                    files={"file": ("f.jpg", io.BytesIO(jpeg_bytes()), "image/jpeg")},
-                )
-                ack = drain(second, "frame.ok")
-                assert ack["seq"] == 1
+    with client.websocket_connect(f"/ws/{room}?role=clock") as first:
+        first.receive_json()
+        with client.websocket_connect(f"/ws/{room}?role=clock") as second:
+            assert second.receive_json()["type"] == "hello"
+            second.send_json({"type": "ping"})
+            assert drain(second, "pong")
 
 
 def test_heartbeat_replies(client):
@@ -270,24 +167,7 @@ def test_heartbeat_replies(client):
     with client.websocket_connect(f"/ws/{game['room']}?role=clock") as clk:
         clk.receive_json()
         clk.send_json({"type": "ping"})
-        pong = drain(clk, "pong")
-        assert "t" in pong
-
-
-def test_camera_cannot_forge_clock_events(client):
-    game = make_game(client)
-    room = game["room"]
-    with client.websocket_connect(f"/ws/{room}?role=camera") as cam:
-        cam.receive_json()
-        cam.send_json({
-            "type": "clock.press", "seq": 1, "side": "white",
-            "white_ms": 1, "black_ms": 1, "t": 0,
-        })
-        cam.send_json({"type": "ping"})
-        drain(cam, "pong")
-
-    from server import storage
-    assert storage.read_events(game["game_id"]) == []
+        assert "t" in drain(clk, "pong")
 
 
 # --------------------------------------------------------------- listing
@@ -295,10 +175,6 @@ def test_camera_cannot_forge_clock_events(client):
 def test_games_listing_and_delete(client):
     a = make_game(client, white_name="Isaac", black_name="Friend")
     b = make_game(client)
-    client.post(
-        f"/games/{a['game_id']}/frames/0/0",
-        files={"file": ("f.jpg", io.BytesIO(jpeg_bytes()), "image/jpeg")},
-    )
 
     listing = client.get("/api/games").json()["games"]
     ids = [g["game_id"] for g in listing]
@@ -306,33 +182,12 @@ def test_games_listing_and_delete(client):
     assert listing[0]["created_at"] >= listing[-1]["created_at"]
 
     row = next(g for g in listing if g["game_id"] == a["game_id"])
-    assert row["frames"] == 1 and row["white_name"] == "Isaac" and row["status"] == "ready"
+    assert row["photos"] == 0 and row["white_name"] == "Isaac" and row["status"] == "ready"
 
     detail = client.get(f"/api/games/{a['game_id']}").json()
     assert detail["room"] == a["room"]
-    assert detail["analysis"] is None
-    assert detail["frames"] == [{"seq": 0, "k": [0]}]
+    assert detail["positions"] == {"game_id": a["game_id"], "photos": []}
 
     assert client.delete(f"/api/games/{a['game_id']}").status_code == 200
     assert client.get(f"/api/games/{a['game_id']}").status_code == 404
-
-
-def test_stop_without_seq_still_captures(client):
-    """A stale cached clock page may omit seq; the final frame must survive."""
-    game = make_game(client)
-    room = game["room"]
-    with client.websocket_connect(f"/ws/{room}?role=camera") as cam:
-        cam.receive_json()
-        with client.websocket_connect(f"/ws/{room}?role=clock") as clk:
-            clk.receive_json()
-            drain(cam, "peer")
-            for seq in (1, 2, 3):
-                clk.send_json({
-                    "type": "clock.press", "seq": seq, "side": "white",
-                    "white_ms": 1, "black_ms": 1, "t": 0,
-                })
-                drain(cam, "capture")
-
-            clk.send_json({"type": "clock.stop", "result": "1-0", "t": 0})
-            cap = drain(cam, "capture")
-            assert cap["seq"] == 4 and cap["reason"] == "stop"
+    assert client.get("/api/games/..%2f..%2fetc").status_code == 404

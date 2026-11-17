@@ -81,6 +81,19 @@
     min-height: 60px;
   }
   .frame-grid figcaption { font-size: var(--text-xs); color: var(--fg-3); margin-top: var(--space-1); text-align: center; }
+  .ph-settings-grid { display: grid; grid-template-columns: 1fr 7em; gap: var(--space-2) var(--space-3); max-width: 440px; }
+  .ph-settings-grid label { margin: 0; }
+  .ph-list { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .ph-item { border-top: 1px solid var(--line-1); padding-top: var(--space-3); }
+  .ph-item img { width: 100%; height: 160px; object-fit: contain; background: var(--bg-sunken); display: block; }
+  .ph-head { display: flex; gap: var(--space-2); align-items: baseline; margin: var(--space-2) 0; }
+  .ph-head strong { font-family: var(--font-mono); font-weight: 500; }
+  .ph-status { font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase;
+    letter-spacing: var(--tracking-wider); color: var(--fg-3); }
+  .ph-status.open { color: var(--negative); }
+  .ph-fen { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-2); word-break: break-all; }
+  .ph-editor { grid-column: 1 / -1; }
+  .ph-flags { color: var(--negative); font-size: var(--text-sm); }
   .img-fallback { font-size: var(--text-xs); color: var(--fg-3); text-align: center; padding: var(--space-4) 0; }
   @media (max-width: 480px) { .frame-grid { grid-template-columns: 1fr; } }
 
@@ -137,6 +150,29 @@
     <span class="spacer"></span>
     <a href="/games">All games</a>
   </header>
+
+  <section class="card stack" id="photos-card" hidden>
+    <div class="row">
+      <h2 style="margin: 0;" id="ph-players"></h2>
+      <span class="spacer"></span>
+      <button type="button" class="btn" id="ph-settings-btn" aria-expanded="false">Settings</button>
+    </div>
+    <p class="muted num" id="ph-summary" style="margin: 0;"></p>
+
+    <form id="ph-settings" class="stack" hidden>
+      <div class="ph-settings-grid">
+        <label>White <input name="white_name" type="text" maxlength="40"></label>
+        <label>Rating <input name="white_rating" type="number" min="100" max="3500"></label>
+        <label>Black <input name="black_name" type="text" maxlength="40"></label>
+        <label>Rating <input name="black_rating" type="number" min="100" max="3500"></label>
+      </div>
+      <label>Board reader <select name="reader_model"></select></label>
+      <p class="muted" style="font-size: var(--text-xs); margin: 0;">Ratings on the chess.com scale. A new reader applies to photos taken after the change.</p>
+      <div class="row"><button type="submit" class="btn btn-primary">Save settings</button></div>
+    </form>
+
+    <div id="ph-list" class="ph-list"></div>
+  </section>
 
   <p class="muted" id="status-msg"></p>
 
@@ -213,6 +249,7 @@
   </div>
 </main>
 
+<script type="module" src="/static/js/photos.js"></script>
 <script type="module" src="/static/js/review.js"></script>
 </body>
 </html>

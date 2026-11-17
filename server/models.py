@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 
 Result = Literal["1-0", "0-1", "1/2-1/2", "*"]
 Status = Literal["ready", "running", "paused", "finished"]
-Role = Literal["clock", "camera"]
 
 # Event types the clock may send. Anything else is ignored rather than rejected,
 # so later phases can add events without breaking older phone pages.
@@ -23,13 +22,12 @@ CLOCK_EVENTS = {
     "clock.reset",
 }
 
-# Which clock events make the camera grab a burst, and the `reason` it is told.
-CAPTURE_REASONS = {
-    "clock.start": "start",
-    "clock.press": "press",
-    "clock.flag": "flag",
-    "clock.stop": "stop",
-}
+# Reader models a game may choose (PROTOCOL.md §4). `local` arrives in Phase 6.
+READER_MODELS = ("claude-fable-5-2", "claude-sonnet-5-5", "claude-opus-5-5")
+ReaderModel = Literal["claude-fable-5-2", "claude-sonnet-5-5", "claude-opus-5-5"]
+
+# Game settings a player can change after the game was created.
+SETTING_KEYS = ("white_name", "black_name", "white_rating", "black_rating", "reader_model")
 
 
 class GameConfig(BaseModel):
@@ -37,31 +35,23 @@ class GameConfig(BaseModel):
     increment_ms: int = Field(default=5_000, ge=0, le=600_000)
     white_name: str = Field(default="White", max_length=40)
     black_name: str = Field(default="Black", max_length=40)
+    # chess.com scale; Phase 3 converts to a Maia band.
+    white_rating: int = Field(default=1350, ge=100, le=3500)
+    black_rating: int = Field(default=1350, ge=100, le=3500)
+    reader_model: ReaderModel = "claude-fable-5-2"
 
 
-class GameCreated(BaseModel):
-    game_id: str
-    room: str
-    created_at: float
-    initial_ms: int
-    increment_ms: int
+class GameSettings(BaseModel):
+    """A partial update of the settings a finished or running game may change."""
+    white_name: str | None = Field(default=None, max_length=40)
+    black_name: str | None = Field(default=None, max_length=40)
+    white_rating: int | None = Field(default=None, ge=100, le=3500)
+    black_rating: int | None = Field(default=None, ge=100, le=3500)
+    reader_model: ReaderModel | None = None
 
 
-class GameSummary(BaseModel):
-    game_id: str
-    room: str
-    created_at: float
-    status: Status
-    result: Result | None
-    frames: int
-    plies: int
-    white_name: str
-    black_name: str
-
-
-class FrameAck(BaseModel):
-    ok: bool
-    seq: int
-    k: int
-    bytes: int
-    path: str
+class Confirm(BaseModel):
+    """A player's corrected board for one photo (PROTOCOL.md §5)."""
+    rows: list[str]                 # photo frame, 8 strings of 8
+    home: Literal["top", "bottom", "left", "right"]
+    ply: int = Field(ge=0)

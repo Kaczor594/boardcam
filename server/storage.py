@@ -1,4 +1,4 @@
-"""Game directories on disk. Layout is docs/PROTOCOL.md §5."""
+"""Game directories on disk. Layout is docs/PROTOCOL.md §6."""
 
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ def create_game(config: GameConfig) -> dict:
         game_id = _new_game_id()
         room = _new_room()
         d = games_root() / game_id
-        (d / "frames").mkdir(parents=True, exist_ok=True)
+        (d / "photos").mkdir(parents=True, exist_ok=True)
         meta = {
             "game_id": game_id,
             "room": room,
@@ -163,6 +163,66 @@ def read_events(game_id: str) -> list[dict]:
     return out
 
 
+# --------------------------------------------------------------------------
+# Photos and positions (PROTOCOL.md §5)
+# --------------------------------------------------------------------------
+
+def photo_path(game_id: str, n: int) -> Path:
+    if not 1 <= n <= 999:
+        raise ValueError(f"photo number out of range: {n}")
+    return game_dir(game_id) / "photos" / f"{n:03d}.jpg"
+
+
+def write_photo(game_id: str, n: int, blob: bytes) -> Path:
+    path = photo_path(game_id, n)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".jpg.tmp")
+    tmp.write_bytes(blob)
+    tmp.replace(path)
+    return path
+
+
+def read_positions(game_id: str) -> dict:
+    saved = read_json(game_id, "positions.json")
+    return saved if saved is not None else {"game_id": game_id, "photos": []}
+
+
+def update_positions(game_id: str, fn) -> dict:
+    """Read-modify-write positions.json under the storage lock.
+
+    ``fn(doc)`` mutates the document in place and returns whatever the caller
+    wants back (usually the photo entry it touched).
+    """
+    with _lock:
+        doc = read_positions(game_id)
+        out = fn(doc)
+        path = game_dir(game_id) / "positions.json"
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(doc, indent=1))
+        tmp.replace(path)
+        return out
+
+
+# --------------------------------------------------------------------------
+# Last-used settings (become the next game's defaults)
+# --------------------------------------------------------------------------
+
+def read_defaults() -> dict:
+    path = data_root() / "settings.json"
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def write_defaults(values: dict) -> None:
+    path = data_root() / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({**read_defaults(), **values}, indent=2))
+    tmp.replace(path)
+
+
 def frame_path(game_id: str, seq: int, k: int) -> Path:
     if not (0 <= seq <= 9999 and 0 <= k <= 9):
         raise ValueError(f"frame out of range: seq={seq} k={k}")
@@ -187,9 +247,6 @@ def frame_inventory(game_id: str) -> list[dict]:
     return [{"seq": s, "k": sorted(ks)} for s, ks in sorted(by_seq.items())]
 
 
-def count_frames(game_id: str) -> int:
-    """Number of distinct capture sequences with at least one frame."""
-    return len(frame_inventory(game_id))
 
 
 def count_plies(game_id: str) -> int:
@@ -201,25 +258,19 @@ def count_plies(game_id: str) -> int:
     return best
 
 
-def max_seq(game_id: str) -> int:
-    """Highest capture seq in the event log, over every capturing event."""
-    best = 0
-    for ev in read_events(game_id):
-        seq = ev.get("seq")
-        if isinstance(seq, int):
-            best = max(best, seq)
-    return best
 
 
 def summarize(game_id: str) -> dict:
     meta = read_meta(game_id)
+    photos = [p for p in read_positions(game_id)["photos"] if p["status"] != "replaced"]
     return {
         "game_id": meta["game_id"],
         "room": meta["room"],
         "created_at": meta["created_at"],
         "status": meta.get("status", "ready"),
         "result": meta.get("result"),
-        "frames": count_frames(game_id),
+        "photos": len(photos),
+        "confirmed": sum(1 for p in photos if p["status"] == "confirmed"),
         "plies": count_plies(game_id),
         "white_name": meta.get("white_name", "White"),
         "black_name": meta.get("black_name", "Black"),

@@ -225,3 +225,77 @@ describe('configure', () => {
     assert.equal(sm.remaining('black', 0), 300000);
   });
 });
+
+describe('snapshot and restore (page reload mid-game)', () => {
+  test('a paused clock comes back with exactly the paused times and press count', () => {
+    const sm = freshSM();
+    sm.press('white', 0);          // ply 1
+    sm.press('black', 3000);       // ply 2
+    sm.press('white', 7000);       // ply 3
+    sm.pause(9000);
+    const snap = JSON.parse(JSON.stringify(sm.snapshot(9000, 1_000_000)));
+    // The page is gone for 10 minutes; performance.now() restarts near zero.
+    const back = ClockSM.restore(snap, 50, 1_600_000);
+    assert.equal(back.state, 'paused');
+    assert.equal(back.turn, 'black');
+    assert.equal(back.seq, 3);
+    assert.equal(back.remaining('white', 50), sm.remaining('white', 9000));
+    assert.equal(back.remaining('black', 50), sm.remaining('black', 9000));
+    assert.ok(back.resume(100));
+    assert.equal(back.state, 'running');
+    assert.equal(back.remaining('black', 1100), sm.remaining('black', 9000) - 1000);
+  });
+
+  test('a running clock charges the time the page was away to the side to move', () => {
+    const sm = freshSM();
+    sm.press('white', 0);          // black to move, black has INITIAL
+    const snap = sm.snapshot(2000, 5_000_000);   // black has used 2 s
+    const back = ClockSM.restore(snap, 10, 5_004_000);   // 4 s later by the wall
+    assert.equal(back.state, 'running');
+    assert.equal(back.turn, 'black');
+    assert.equal(back.remaining('black', 10), INITIAL - 2000 - 4000);
+    assert.equal(back.remaining('white', 10), INITIAL + INCREMENT);
+    // Presses carry on from the restored count.
+    const res = back.press('black', 1010);
+    assert.equal(res.seq, 2);
+  });
+
+  test('a clock that ran out while the page was away flags on the next tick', () => {
+    const sm = freshSM();
+    sm.press('white', 0);
+    const back = ClockSM.restore(sm.snapshot(0, 0), 0, INITIAL + 1);
+    assert.deepEqual(back.tick(1), { flagged: 'black' });
+  });
+
+  test('ready, stopped and junk snapshots', () => {
+    const ready = ClockSM.restore(freshSM().snapshot(0, 0), 5, 99);
+    assert.equal(ready.state, 'ready');
+    assert.equal(ready.seq, 0);
+    const sm = freshSM();
+    sm.press('white', 0);
+    sm.stop('1-0', 500);
+    const stopped = ClockSM.restore(sm.snapshot(600, 1), 0, 2);
+    assert.equal(stopped.state, 'stopped');
+    assert.equal(stopped.result, '1-0');
+    assert.equal(ClockSM.restore(null, 0, 0), null);
+    assert.equal(ClockSM.restore({ v: 0 }, 0, 0), null);
+  });
+});
+
+import { squareOf, cellOf } from './board.js';
+
+describe('board.js mirrors engine/position.py', () => {
+  // Generated from engine.position.square_of; regenerate if that ever changes.
+  const PY = {"bottom": [[[0, 7], [1, 7], [2, 7], [3, 7], [4, 7], [5, 7], [6, 7], [7, 7]], [[0, 6], [1, 6], [2, 6], [3, 6], [4, 6], [5, 6], [6, 6], [7, 6]], [[0, 5], [1, 5], [2, 5], [3, 5], [4, 5], [5, 5], [6, 5], [7, 5]], [[0, 4], [1, 4], [2, 4], [3, 4], [4, 4], [5, 4], [6, 4], [7, 4]], [[0, 3], [1, 3], [2, 3], [3, 3], [4, 3], [5, 3], [6, 3], [7, 3]], [[0, 2], [1, 2], [2, 2], [3, 2], [4, 2], [5, 2], [6, 2], [7, 2]], [[0, 1], [1, 1], [2, 1], [3, 1], [4, 1], [5, 1], [6, 1], [7, 1]], [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [5, 0], [6, 0], [7, 0]]], "top": [[[7, 0], [6, 0], [5, 0], [4, 0], [3, 0], [2, 0], [1, 0], [0, 0]], [[7, 1], [6, 1], [5, 1], [4, 1], [3, 1], [2, 1], [1, 1], [0, 1]], [[7, 2], [6, 2], [5, 2], [4, 2], [3, 2], [2, 2], [1, 2], [0, 2]], [[7, 3], [6, 3], [5, 3], [4, 3], [3, 3], [2, 3], [1, 3], [0, 3]], [[7, 4], [6, 4], [5, 4], [4, 4], [3, 4], [2, 4], [1, 4], [0, 4]], [[7, 5], [6, 5], [5, 5], [4, 5], [3, 5], [2, 5], [1, 5], [0, 5]], [[7, 6], [6, 6], [5, 6], [4, 6], [3, 6], [2, 6], [1, 6], [0, 6]], [[7, 7], [6, 7], [5, 7], [4, 7], [3, 7], [2, 7], [1, 7], [0, 7]]], "left": [[[0, 0], [0, 1], [0, 2], [0, 3], [0, 4], [0, 5], [0, 6], [0, 7]], [[1, 0], [1, 1], [1, 2], [1, 3], [1, 4], [1, 5], [1, 6], [1, 7]], [[2, 0], [2, 1], [2, 2], [2, 3], [2, 4], [2, 5], [2, 6], [2, 7]], [[3, 0], [3, 1], [3, 2], [3, 3], [3, 4], [3, 5], [3, 6], [3, 7]], [[4, 0], [4, 1], [4, 2], [4, 3], [4, 4], [4, 5], [4, 6], [4, 7]], [[5, 0], [5, 1], [5, 2], [5, 3], [5, 4], [5, 5], [5, 6], [5, 7]], [[6, 0], [6, 1], [6, 2], [6, 3], [6, 4], [6, 5], [6, 6], [6, 7]], [[7, 0], [7, 1], [7, 2], [7, 3], [7, 4], [7, 5], [7, 6], [7, 7]]], "right": [[[7, 7], [7, 6], [7, 5], [7, 4], [7, 3], [7, 2], [7, 1], [7, 0]], [[6, 7], [6, 6], [6, 5], [6, 4], [6, 3], [6, 2], [6, 1], [6, 0]], [[5, 7], [5, 6], [5, 5], [5, 4], [5, 3], [5, 2], [5, 1], [5, 0]], [[4, 7], [4, 6], [4, 5], [4, 4], [4, 3], [4, 2], [4, 1], [4, 0]], [[3, 7], [3, 6], [3, 5], [3, 4], [3, 3], [3, 2], [3, 1], [3, 0]], [[2, 7], [2, 6], [2, 5], [2, 4], [2, 3], [2, 2], [2, 1], [2, 0]], [[1, 7], [1, 6], [1, 5], [1, 4], [1, 3], [1, 2], [1, 1], [1, 0]], [[0, 7], [0, 6], [0, 5], [0, 4], [0, 3], [0, 2], [0, 1], [0, 0]]]};
+  test('squareOf matches square_of for every cell and home side', () => {
+    for (const home of Object.keys(PY)) {
+      for (let r = 0; r < 8; r += 1) {
+        for (let c = 0; c < 8; c += 1) {
+          const sq = squareOf(r, c, home);
+          assert.deepEqual([sq.file, sq.rank], PY[home][r][c], `${home} ${r},${c}`);
+          assert.deepEqual(cellOf(sq.file, sq.rank, home), { r, c });
+        }
+      }
+    }
+  });
+});

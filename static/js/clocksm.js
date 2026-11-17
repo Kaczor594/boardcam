@@ -161,6 +161,46 @@ export class ClockSM {
     return true;
   }
 
+  /**
+   * Everything needed to rebuild this clock after the page is reloaded.
+   * `now` is the monotonic time (performance.now()), `wallNow` is Date.now():
+   * the monotonic clock restarts with the page, wall time does not.
+   */
+  snapshot(now, wallNow) {
+    return {
+      v: 1,
+      initialMs: this.initialMs,
+      incrementMs: this.incrementMs,
+      state: this._state,
+      turn: this._turn,
+      ms: { white: this.remaining('white', now), black: this.remaining('black', now) },
+      wall: wallNow,
+      seq: this._seq,
+      result: this._result,
+      flaggedSide: this._flaggedSide,
+    };
+  }
+
+  /**
+   * A clock rebuilt from snapshot(). A running clock keeps running: the wall
+   * time that passed while the page was gone is charged to the side to move,
+   * exactly as if the page had stayed open. A paused clock comes back with the
+   * times it was paused at. Returns null for anything that is not a snapshot.
+   */
+  static restore(snap, now, wallNow) {
+    if (!snap || snap.v !== 1 || !snap.ms) return null;
+    const sm = new ClockSM({ initialMs: snap.initialMs, incrementMs: snap.incrementMs });
+    sm._state = snap.state;
+    sm._turn = snap.turn;
+    sm._ms = { white: snap.ms.white, black: snap.ms.black };
+    sm._seq = snap.seq;
+    sm._result = snap.result;
+    sm._flaggedSide = snap.flaggedSide;
+    const away = Math.max(0, wallNow - snap.wall);   // a clock set backwards is not negative time
+    sm._lastTs = snap.state === 'running' ? now - away : now;
+    return sm;
+  }
+
   /** Change the time control. Only legal in `ready`. */
   configure({ initialMs, incrementMs }) {
     if (this._state !== 'ready') return false;
