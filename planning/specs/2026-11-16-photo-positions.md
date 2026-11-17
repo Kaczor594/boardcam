@@ -1,7 +1,7 @@
 ---
 created: 2026-11-16                 # NEVER changes
-modified: [2026-11-16, 2026-11-16, 2026-11-17, 2026-11-17]  # append-only
-sessions: [2026-11-16, 2026-11-16, 2026-11-17, 2026-11-17]  # append-only; one entry per session that touches this spec
+modified: [2026-11-16, 2026-11-16, 2026-11-17, 2026-11-17, 2026-11-17]  # append-only
+sessions: [2026-11-16, 2026-11-16, 2026-11-17, 2026-11-17, 2026-11-17]  # append-only; one entry per session that touches this spec
 commits: [d0620c2, 2b1bb2e, 74704c3, e4c1b4d]               # append-only; short hashes, appended as phases land
 back_refs: [planning/specs/2026-09-12-boardcam.md]
 forward_refs: []
@@ -71,7 +71,7 @@ graph, and exports a PGN that marks which moves are inferred.
 |---|---|---|---|---|
 | 1 | Opus | none | yes | Removal plus one module; artifact on disk |
 | 2 | Opus | none | yes | Backend and clock page; next is math |
-| 3 | Fable 5 | none | yes | New search and probability design |
+| 3 | Fable 5 → ran on Opus 5.5 | none | yes | New search and probability design |
 | 4 | Opus | none | yes | Frontend on a defined interface |
 | 5 | Opus | none | no | Phase 6 uses its crops directly |
 | 6 | Fable 5 | none | no | Model design; final phase |
@@ -140,25 +140,26 @@ Given two confirmed positions and the number of plies between them, return the
 most likely lines and, for every ply, how likely each candidate move is.
 **Execution:** `Fable 5` — new search and probability design; the method is the deliverable. Agents: none — one coupled derivation.
 **Context:** **CLEAR after this phase** — the derivation is spent once `engine/lines.py` and its README section exist; Phase 4 consumes `lines.json`.
-- [ ] `engine/humanlike.py`: lc0 with a Maia weight file at one node, policy read from verbose move stats, cached per FEN and band; the two players may use different bands
-- [ ] Rating → band: choose by which band best predicts each player's real moves in the chess-insights database, fitted on games before a cut-off date and checked on games after it; the per-game rating setting overrides
-- [ ] Opening prior: move frequencies from the players' own games for positions they have reached before, blended with Maia by sample size
-- [ ] `engine/lines.py`: best-first search from A for paths of exactly `n` plies ending in B, pruned by necessary conditions (material can only fall, pawns only advance, a lower bound on plies still needed), scored by the product of move probabilities; returns top lines with normalised probabilities and per-ply move marginals. Tries `n−1` and `n+1` when `n` yields nothing. Time-boxed; reports when it gave up.
-- [ ] Castling rights and en passant in the resulting FENs come from the chosen path
-- [ ] `engine/evalgraph.py`: Stockfish evaluation for every ply of a line, and Stockfish's top moves at a given ply (for the engine arrows)
-- [ ] `engine/lines_eval.py`: cut real games from the chess-insights database at known plies and score the solver by gap length (4, 8, 12, 16, 24): a path found, true line is top-1, true line in top-3, share of plies where the true move is the top marginal. Evaluation games are after the cut-off; nothing is tuned on them.
-- [ ] Photo hint threshold: from the accuracy-by-gap table, the number of plies since the last confirmed photo beyond which reconstruction is no longer dependable (true line outside the top 3 more often than not, or the search no longer finishes in its time box). One number per rating band, written to config. Fitted on games before the cut-off, reported on games after.
-- [ ] Document the method and the measured table in `engine/README.md`
+- [x] `engine/humanlike.py`: lc0 with a Maia weight file at one node, policy read from verbose move stats, cached per FEN and band; the two players may use different bands
+- [x] Rating → band: choose by which band best predicts each player's real moves in the chess-insights database, fitted on games before a cut-off date and checked on games after it; the per-game rating setting overrides
+- [x] Opening prior: move frequencies from the players' own games for positions they have reached before, blended with Maia by sample size
+- [x] `engine/lines.py`: best-first search from A for paths of exactly `n` plies ending in B, pruned by necessary conditions (material can only fall, pawns only advance, a lower bound on plies still needed), scored by the product of move probabilities; returns top lines with normalised probabilities and per-ply move marginals. Tries `n−1` and `n+1` when `n` yields nothing. Time-boxed; reports when it gave up.
+- [x] Castling rights and en passant in the resulting FENs come from the chosen path
+- [x] `engine/evalgraph.py`: Stockfish evaluation for every ply of a line, and Stockfish's top moves at a given ply (for the engine arrows)
+- [x] `engine/lines_eval.py`: cut real games from the chess-insights database at known plies and score the solver by gap length (4, 8, 12, 16, 24): a path found, true line is top-1, true line in top-3, share of plies where the true move is the top marginal. Evaluation games are after the cut-off; nothing is tuned on them.
+- [x] Photo hint threshold: from the accuracy-by-gap table, the number of plies since the last confirmed photo beyond which reconstruction is no longer dependable (true line outside the top 3 more often than not, or the search no longer finishes in its time box). One number per rating band, written to config. Fitted on games before the cut-off, reported on games after.
+- [x] Document the method and the measured table in `engine/README.md`
 
 **Validation (gate — do not start Phase 4 until these pass):**
 - `.venv/bin/pytest -q tests/test_lines.py` → `0 failed` (includes: every returned path is legal, has exactly the requested length, and ends in B)
 - `.venv/bin/python -m engine.lines_eval --gaps 4,8 --games 200 --split after-cutoff` → `path-found >= 0.98`, `true-line-top3 >= 0.60` at gap 4
 - `.venv/bin/python -m engine.lines_eval --gaps 12,16,24 --games 200 --split after-cutoff` → `path-found >= 0.90`, median time per gap `<= 30 s`; top-1/top-3 recorded in Notes, no threshold (these gaps are expected to be ambiguous)
+  - [F] 2026-11-17: gap 12 1.000 / 10.2 s, gap 16 0.970 / 17.1 s pass; **gap 24 path-found 0.870** (median 20.7 s) fails. Waiting on Isaac's call (see Amendments).
 - `.venv/bin/python -m engine.lines_eval --check-leak` → `0 evaluation games before cut-off`
 - `.venv/bin/python -m engine.lines_eval --hint-threshold` → prints one ply count per band, each between 6 and 60
 
 **Handoff (do before stopping):**
-- [ ] Persist to `engine/README.md` and Notes: the `lines.json` schema, the chosen bands, the accuracy-by-gap table, what was tried and dropped
+- [x] Persist to `engine/README.md` and Notes: the `lines.json` schema, the chosen bands, the accuracy-by-gap table, what was tried and dropped
 
 **Resume with:** `/clear` → `/model opus` → `/spec build planning/specs/2026-11-16-photo-positions.md`
 Next phase reads: this spec, `engine/README.md` (lines section), `docs/PROTOCOL.md`, `static/js/board.js`, `server/review.py` — and nothing else.
@@ -254,8 +255,11 @@ grows with data, and offer it as a reader backend.
 - Glyphs: fonts disagree on which chess code points are hollow (headless Chrome drew Black's king hollow), so the board uses the solid glyph for both colours and colours White by CSS.
 - The photo hint knows only the last confirmed position and the ply count, not the current board, so its threshold is a ply count. It is meant to be easy to miss; if it is never noticed in play, raise its contrast before adding anything louder.
 
+- **Phase 3 build, 2026-11-17 (Opus 5.5).** Method, `lines.json` schema, full tables and the tried-and-dropped list are in `engine/README.md` (Lines section). Bands: chess.com rating + 250 → nearest Maia-1 band (1350 → 1600); opening prior from the player's own games blended at k = 5 (−0.99 vs −1.58 nats/move without). Fit split before-cutoff = 142 games 2024-12-24…2025-06-23; evaluation split = 768 games 2025-07-18…2026-11-16. After-cutoff, 200 cases per gap (found / top-1 / top-3 / median s): 4 → 1.000 / 0.915 / 0.985 / 0.0; 8 → 1.000 / 0.590 / 0.745 / 0.1; 12 → 1.000 / 0.350 / 0.505 / 10.2; 16 → 0.970 / 0.210 / 0.295 / 17.1; 24 → 0.870 / 0.020 / 0.030 / 20.7. Hint threshold (`hint_plies` in `engine/solver.json`): 1100 18, 1200 17, 1300 15, 1400 14, 1500 12, 1600 11, 1700 9, 1800 8, 1900 6 plies; only 1300–1600 seen in the fit. `pytest -q` 80 passed; `--check-leak` → 0 evaluation games before cut-off.
+
 ## Amendments
 - **2026-11-17 (Phase 2, scope and files).** The `Resume with` list was too thin: building the phase also needed `static/js/clocksm.js`, `static/clock.html`, `server/models.py`, `server/ws.py`, `engine/reader.py`, `engine/position.py`, `engine/read_eval.py` (cache reuse), the existing tests, and the review/games pages. Phase 4's list should name `static/js/photos.js`, `static/js/board.js` and `server/photos.py`. Changes beyond Files: `clocksm.js` gained `snapshot`/`restore` (listed as unchanged; the reload requirement is a state-machine concern and is tested there); new `server/photos.py` (intake logic, `READER` stub point) and `static/js/photos.js` (photos + settings section on the review page, which Phase 4 extends rather than replaces); `static/js/qr.js` and `tests/test_qr.py` removed with pairing; stop/flag no longer push `analysis.error` (nothing reads moves until Phase 3) and send `ply` instead of a capture `seq`; `scripts/serve.sh` refuses to start without `ANTHROPIC_API_KEY`. `scripts.replay_photos` accepts the gate's `data/labels/green-mat/2777.jpg` for the real `photos/2777.jpg`.
 - **2026-11-16 (Phase 1, scoring frame).** `read_eval` scores in board coordinates, not the photo frame: a diagonal photo (2378, 2481, 2483, 2799, 3045) has no well-defined "row farthest from the camera", so a photo-frame label would be arbitrary. `per-square`, `occupied-square` and `perfect-board` take the read at the best-fitting of the four orientations; `home-side` scores the reader's own call; `fen-correct` (new) is the end-to-end share. Hold-out truth is a FEN placement, entered from a blank board on a page written by the new `scripts/label_page.py` (not in Files; the Phase 5 `static/label.html` still replaces it) and merged with `--merge`. The gate thresholds are unchanged.
 - **2026-11-16 (Phase 1, removals).** `tests/test_calibrate.py` was removed with the others: it builds its frames with `synth`. `engine/calibrate.py` and `engine/rectify.py` stay (as planned) but are now covered only by `test_field_fixes.py::test_frame_checks…`. Server: `analysis.py` cut to the per-game registry plus a `finish` that reports "no reader yet"; `/camera`, the calibration push, per-press reading, manual corners and orientation matching are gone from `app.py`; corrections return 409 until the Phase 3 solver. `test_review.py` keeps payload, result, verify, lichess and finished-game tests on a fixture that writes `analysis.json` directly. `CLAUDE.md` now points at this spec (the stale `engine.evaluate`/`vision_llm` rules would have misled Phase 2).
 - **2026-11-17 (Phase 1, output cap).** The hold-out gate failed on two diagonal photos that hit `max_tokens` at 16 000. Isaac chose both fixes: now, the reader streams (`messages.stream` + `get_final_message`) with `MAX_TOKENS` 64 000, which is not a prompt change and so is fair on the hold-out; later, a prompt for diagonal photos, tested only on new diagonal photos (task added to Phase 5). Only the two failed reads were redone. Phase 2 should expect a diagonal photo to take up to a few minutes and about $0.80, and show the phone that the read is still running.
+- **2026-11-17 (Phase 3, tier, files, gate).** Ran on Opus 5.5, not Fable 5: Fable was dropped from Isaac's plan (downgrade logged; no rework yet attributable to it). New files beyond Files: `engine/humanlike.json` (fitted offset, k, cut-off), `engine/solver.json` (search constants, tune log, `hint_plies`), untracked `data/players.json` (player → online accounts for the opening prior), cache `data/lines_eval/`. Building it also read the chess-insights DB schema (`~/claude-projects/chess-insights/data/chess_insights.db`, env `CHESS_INSIGHTS_DB`) and the old `engine/README.md`. Definitions: path-found counts only lines of exactly `n` plies; times are measured with 3 solves in parallel, each with 3 lc0 processes. The first gated run had gap 24 at 0.735, with 47 of 53 misses mislabelled `none`; two fixes chosen on the before-cutoff split only (beam reserves half its width for positions nearest B; time planning with a safety margin and finishing past the deadline instead of returning nothing; a pruned beam is never `complete`) raised it to 0.870 — still under 0.90. The after-cutoff split has now been looked at twice; further changes must be chosen on before-cutoff. Phase 4's `Resume with` list should also name `static/js/photos.js` and `server/photos.py`.

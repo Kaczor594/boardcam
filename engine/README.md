@@ -1,83 +1,253 @@
 # BoardCam engine
 
-Frames in, moves out. This file is the contract between phases: everything a
-later phase needs from an earlier one is written down here, so a new session can
-pick up without re-reading the code that produced it.
+Photos in, positions and likely moves out. This file is the contract between
+phases: what a later phase needs from an earlier one is written here, so a new
+session can pick up without re-reading the code that produced it.
 
-Companion documents: `docs/PROTOCOL.md` (the wire and storage contract, written
-in Phase 1) and `planning/specs/2026-09-12-boardcam.md` (the plan, including
-Notes §B for the calibration method and §C for the emission model).
+Companion documents: `docs/PROTOCOL.md` (wire and storage contract; §9 is the
+photo reader and `engine.position`) and
+`planning/specs/2026-11-16-photo-positions.md` (the plan).
 
----
-
-## Corpus layout (Phase 2)
-
-`synth.generate` writes game directories that are **byte-for-byte the same
-shape** as real ones, so `engine.evaluate` never learns which it is looking at:
-
-```
-data/synth/<profile>/<NNN-name>/
-    frames/0000_0.jpg        start position (seq 0 has one candidate)
-    frames/0001_0.jpg …_2.jpg  burst after ply 1
-    …
-    events.jsonl             clock.config, clock.start, clock.press…, clock.stop
-    truth.pgn                the game
-    truth.json               ground truth for the gate (synthetic only)
-```
-
-Capture numbering is the protocol's: **seq 0 is the start position, seq n is the
-position after ply n**, and the final `clock.stop` capture (seq = plies + 1)
-photographs the same position as the last press. That trailing frame is
-deliberate — it is a real frame that advanced no plies, which is the ∅ case the
-tracker has to survive on every single game.
-
-### `truth.json`
-
-| field | meaning |
+| module | does |
 |---|---|
-| `corners` | board corners of frame 0, image pixels, ordered `[a1, h1, h8, a8]` |
-| `corners_by_seq` | the same for every capture's `k=0` frame (jitter and bumps move them) |
-| `camera_side` | which board edge the camera is nearest: `rank1 \| fileh \| rank8 \| filea` |
-| `square_is_light` | `[file][rank]`, `True` for light — a1 is always dark |
-| `plies`, `stop_seq`, `bump_seq`, `features` | game shape; `features` lists castling, en passant, promotion, underpromotion |
-| `elevation_deg`, `azimuth_deg`, `focal_px`, `image` | camera pose, for diagnosing failures by geometry |
-
-### Profiles
-
-| profile | elevation | scene | bursts | role |
-|---|---|---|---|---|
-| `clean` | 45–80° | no players, no props, no hands, no jitter | 1 | sanity only |
-| `shallow` | 25–40° | full scene noise, hands, jitter, bumps | 3 | **Isaac's setup — the primary gate** |
-| `hard` | 35–70° | as shallow, steeper, more bumps | 3 | secondary gate |
-| `nightmare` | 20–25° | dim, heavy jitter | 3 | reported, never gated |
-
-Regenerate with the seeds the thresholds were measured on, or the numbers below
-mean nothing:
-
-```
-python -m synth.generate --games 30 --profile clean     --seed 1 --out data/synth/clean
-python -m synth.generate --games 40 --profile shallow   --seed 4 --out data/synth/shallow
-python -m synth.generate --games 30 --profile hard      --seed 2 --out data/synth/hard
-python -m synth.generate --games 10 --profile nightmare --seed 3 --out data/synth/nightmare
-```
-
-`--max-plies N` truncates every game; it exists so tests can render a corpus in
-seconds, and it changes `truth.pgn` accordingly. `--bursts` overrides the
-profile's burst count.
-
-**The camera always stands on a file side** (`sides=(1, 3)`), never behind a
-player. This is not a simplification for the engine's benefit: at 25–40° a
-camera behind a seated player photographs the player, not the board, and
-`docs/SETUP.md` tells Isaac to mount it on the free side for exactly that
-reason.
-
-Piece heights are real: a king is 1.75 squares tall, so at 30° it hides roughly
-three squares behind itself. Every occlusion number in Notes §C is sized for
-that, so do not "fix" a tracking problem by shrinking the pieces.
+| `reader.py`, `position.py`, `read_eval.py` | photo → 8×8 read → FEN; reader accuracy (PROTOCOL §9) |
+| `humanlike.py` | move probabilities for a player of a given strength (Maia via lc0, opening prior) |
+| `lines.py` | likely lines of exactly `n` plies between two positions |
+| `lines_eval.py` | scores the solver on real games cut at known plies; tunes it; fits the photo hint |
+| `evalgraph.py` | Stockfish evaluation per ply and top moves (review page) |
+| `pgn.py` | PGN export |
+| `calibrate.py`, `rectify.py` | September grid finder, kept until Phase 5 decides what to reuse |
 
 ---
 
-## Calibration (Phase 2)
+## Lines (photo-positions Phase 3)
+
+### The question
+
+Two confirmed photo positions A and B, and the clock's ply count `n` between
+them. Which `n`-ply move sequences take A to B, and how likely is each? Every
+legal path of exactly `n` plies from A that ends on B's placement is a
+candidate; its weight is the product of the per-move probabilities that the
+two players (at their ratings) would play those moves. Normalising over the
+candidates is Bayes' rule with the endpoint as the evidence:
+`P(line | A, B, n) ∝ Π p(move_i | position_i)`.
+
+### Move probabilities (`engine.humanlike`)
+
+* **Maia-1** (CSSLab v1.0 weights, nine bands 1100–1900 on the Lichess scale)
+  through `lc0` at one node. The policy is read from `VerboseMoveStats` at
+  `--policy-softmax-temp=1.0` (lc0's default 1.359 flattens it) on the CPU
+  BLAS backend (0.6 ms per position vs 2.0 ms on Metal; same policy to
+  1e-4, same top move on 200/200 test positions). lc0 prints P to 0.01 %; a
+  printed 0.00 % becomes 5e-5 and the policy is renormalised over the legal
+  moves. Positions go to lc0 as a FEN without history (`fen_only`), so the
+  cache key is the position.
+* **Rating → band.** `band = nearest band to (chess.com rating + offset)`.
+  The offset is fitted on 9 257 moves sampled from 783 chess.com games of
+  10+ minutes before the cut-off, maximising the log-likelihood of the moves
+  actually played (`python -m engine.humanlike fit`). **Offset = +250**, so the
+  default 1350 plays as Maia-1600. The surface is flat (−1.850 nats/move at
+  +250, −1.869 at 0): band choice matters little next to the prior. The
+  per-game rating setting is the input; the two players can have different
+  bands.
+* **Opening prior.** For a player with known online accounts
+  (`data/players.json`, untracked: `{"Isaac": ["kaczor594", "simsimlamachine"]}`),
+  the moves they actually played from a position (first 40 plies, all their
+  games) are blended with Maia as a Dirichlet prior:
+  `p(m) = (count(m) + k·maia(m)) / (N + k)`. **k = 5**, fitted on the owner's
+  moves in `[2024-07-01, 2025-07-01)` with the prior built from games before
+  2024-07-01: −0.988 nats/move with the prior vs −1.577 with Maia alone, on
+  3 124 moves from positions the owner had reached before. Unknown players get
+  Maia only.
+* Fitted values live in `engine/humanlike.json` (offset, k, cut-off, the fit's
+  per-offset and per-k log-likelihoods, best band per 100-point bucket).
+
+### Search (`engine.lines`)
+
+```python
+from engine.humanlike import Maia, for_game
+from engine.lines import solve
+mover = for_game(1350, 1350, white_name="Isaac", black_name="Opponent",
+                 maia=Maia(workers=4))
+res = solve(fen_a, fen_or_placement_b, n, mover.policy, prefetch=mover.prefetch)
+res.to_json()        # the lines.json "result" object below
+```
+
+1. **Pruning bound** (`Bound.need`, admissible — checked on 600 random games
+   in `tests/test_lines.py`). For each side, a lower bound on the moves it still
+   needs: per piece type, a least-cost matching of B's squares to distinct
+   current pieces (or promotions) at empty-board distance — knight BFS, bishop
+   1/2 and never across colours, rook and queen 1/2, king steps, castling as one
+   king move that carries the rook; plus a pawn matching (pawns only advance,
+   change file only by capturing, one double step from the start rank); plus
+   one move per enemy piece that must be captured. A state is dropped when a
+   side needs more moves than it has left, when the pawn file changes exceed
+   the captures available, when material would have to grow, or when a side
+   already exactly on B would have to spend a single move.
+2. **Short gaps (n ≤ 10): best-first.** Priority `g + c·plies_left +
+   λ·distance` with `g = −Σ log p` and `distance` the bound summed over both
+   sides. A position reached by different move orders is evaluated once but
+   may be popped up to `top` times (k-shortest paths). Capped at 2 000
+   expansions; if it does not finish, the beam takes over with the time left.
+3. **Long gaps: depth-synchronous beam.** Every ply keeps the `width`
+   positions with the lowest `g + λ·distance` (best path's `g`), each with its
+   `top` best paths; transpositions merge. A layer's positions are sent to
+   lc0 in parallel (`prefetch`, `Maia(workers=…)`). Half the width
+   (`beam_div` 0.5) goes not by score but to the positions that need the
+   fewest moves to reach B, so a reachable B is not crowded out by likelier
+   positions drifting away from it. Width shrinks if the time left would not
+   reach ply `n` (planned on 60 % of the measured rate). Past the deadline the
+   remaining plies run on the 30 positions nearest B for up to 3 s more,
+   rather than returning nothing. A beam that cut anything reports
+   `complete: false`, so a miss is `timeout`, never `none`.
+4. **Answer.** The `top` lines found, normalised among themselves; per-ply
+   marginals are the probability-weighted share of those lines playing each
+   move. If `n` yields nothing, `n − 1` then `n + 1` are tried (a photo taken
+   after a move but before the press); `n` gets `main_share` of the time box.
+   Castling rights and the en-passant square in `fen_end` come from the path.
+
+Solver constants live in `engine/solver.json` (written by
+`python -m engine.lines_eval --tune` and `--hint-threshold`).
+
+### `lines.json` (written per game by Phase 4)
+
+`data/games/<id>/lines.json` holds one entry per gap between consecutive
+confirmed positions (the first gap starts at the initial position, ply 0):
+
+```json
+{"game_id": "20261117-201500-a1b2",
+ "gaps": [
+  {"from": {"photo": null, "ply": 0, "fen": "rnbqkbnr/… w KQkq - 0 1"},
+   "to":   {"photo": 1, "ply": 14, "fen": "<confirmed FEN of photo 1>"},
+   "bands": {"white": 1600, "black": 1600},
+   "prior": {"white": true, "black": false},
+   "solver": {"lam": 2.0, "width": 1500, "time_box": 30.0},
+   "result": {                                   // engine.lines.Result.to_json()
+     "fen_a": "…", "placement_b": "…",
+     "n_requested": 14,                          // the clock's count
+     "n_used": 14,                               // n, n−1 or n+1; null if nothing found
+     "status": "found",                          // found | none | timeout
+     "complete": true,                           // false: the time box cut the search
+     "lines": [                                  // most likely first, at most `top` (5)
+       {"moves": ["e2e4", "…"], "san": ["e4", "…"],
+        "logp": -17.42,                          // Σ log p under the movers
+        "prob": 0.61,                            // normalised among the lines returned
+        "fen_end": "… b Kkq - 2 8"}],            // castling / e.p. from this path
+     "marginals": [                              // one list per ply, n_used long
+       [{"uci": "e2e4", "san": "e4", "p": 0.83}, {"uci": "d2d4", "san": "d4", "p": 0.17}]],
+     "expansions": 4210, "secs": 3.1,
+     "tried": [{"n": 14, "lines": 5, "complete": true, "expansions": 4210}]}}]}
+```
+
+- `san` in `marginals` is relative to the top line's board at that ply; a move
+  that only appears in other lines can have `san: null`.
+- The next gap starts from `to.fen` of this one. When the top line's
+  `fen_end` has different castling or en-passant fields from the photo's
+  confirmed FEN, the line's value is the one of record (the photo cannot see
+  castling rights).
+- `status: "none"` with `complete: true` means no legal path of `n − 1…n + 1`
+  plies exists: one of the two boards, or the ply stamp, is wrong. `timeout`
+  means the search gave up; the review page shows the gap as unsolved.
+
+### Evaluation (`engine.lines_eval`)
+
+A *case* is a real game from the chess-insights database cut at a start ply
+`s` (uniform over the game, seeded) with gap `g`: A is the true position after
+`s` plies (true castling and e.p.), B the placement after `s + g`, and the
+solver is asked for `g` plies with the time box and settings above. Games are
+chess.com, 10+ minutes, involving the database owner, so ratings are on the
+app's scale.
+
+| split | games | used for |
+|---|---|---|
+| fit: `before-cutoff` | 142, 2024-12-24 … 2025-06-23 (`[2024-07-01, 2025-07-01)`) | `--tune` (λ, width), `--hint-threshold` fit |
+| evaluation: `after-cutoff` | 768, 2025-07-18 … 2026-11-16 | the gate tables; nothing is tuned on it |
+
+The rating offset and `k` were fitted on games before the cut-off
+(2025-07-01); the opening prior used for evaluation is built from the owner's
+games before the cut-off; for the fit split, from games before 2024-07-01.
+`--check-leak` checks all of this.
+
+Metrics: **path-found** — a line of exactly `g` plies was returned (a ±1 line
+does not count); **top-1 / top-3** — the true line is first / among the first
+three; **marg-top** — share of plies where the true move is the top marginal;
+times are wall-clock per solve with three solves running at once, each with
+three lc0 processes (a single solve on the phone's server is faster).
+
+### Measured accuracy (2026-11-17)
+
+**Evaluation split (`after-cutoff`), 200 cases per gap**, `engine/solver.json`
+as committed (λ 2, width 1500, `beam_div` 0.5, time box 30 s):
+
+| gap (plies) | path-found | true line top-1 | true line top-3 | true move = top marginal | median s | p90 s | timeouts |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 1.000 | 0.915 | 0.985 | 0.943 | 0.0 | 0.1 | 0 |
+| 8 | 1.000 | 0.590 | 0.745 | 0.779 | 0.1 | 0.8 | 0 |
+| 12 | 1.000 | 0.350 | 0.505 | 0.685 | 10.2 | 13.9 | 0 |
+| 16 | 0.970 | 0.210 | 0.295 | 0.550 | 17.1 | 18.4 | 5 |
+| 24 | **0.870** | 0.020 | 0.030 | 0.210 | 20.7 | 29.7 | 22 |
+
+Gaps 4 and 8 never reach the beam (best-first finishes), so they were measured
+once, before `beam_div`; 12–24 are with it. Before `beam_div` and the deadline
+fix, gap 24 was 0.735 found (47 of its 53 misses labelled `none` though the beam
+had only pruned), 16 was 0.950.
+
+**Fit split (`before-cutoff`)**, the numbers the settings were chosen on:
+
+| setting | gap 16 found / top-3 / median | gap 24 found / top-3 / median |
+|---|---|---|
+| λ 2, width 1500 (tune, 20 cases) | 0.95 / 0.30 / 17.6 s | 0.95 / 0.00 / 23.8 s |
+| + deadline fix, `beam_div` 0 (40 cases) | 0.95 / 0.20 / 14.7 s | 0.825 / 0.00 / 19.6 s |
+| + deadline fix, `beam_div` 0.5 (40 cases) | 0.95 / 0.20 / 17.1 s | 0.925 / 0.00 / 20.4 s |
+| final, hint-fit cases (60) | 0.98 / 0.27 | 0.85 / 0.03 |
+
+Reading: up to 8 plies the true line is almost always among the top three; at
+12 it is a coin flip; from 16 the solver gives *a* plausible line and the
+page must present it as a guess. Ply-level marginals stay informative longer
+than whole lines (0.55 of moves at 16).
+
+### Photo hint threshold
+
+`python -m engine.lines_eval --hint-threshold` fits a logistic model of
+"true line in top 3" on gap and band (band of the mean of the two ratings,
+`(band − 1500)/100`) on before-cutoff cases (60 games × gaps 4, 8, 12, 16, 24,
+seed 2), and takes per band the gap where it crosses 0.5, clamped to
+[6, 60]. Coefficients: intercept 3.684, gap −0.305, band −0.465. Written to
+`engine/solver.json` as `hint_plies`:
+
+| band | 1100 | 1200 | 1300 | 1400 | 1500 | 1600 | 1700 | 1800 | 1900 |
+|---|---|---|---|---|---|---|---|---|---|
+| hint after (plies) | 18 | 17 | 15 | 14 | 12 | 11 | 9 | 8 | 6 |
+
+Only bands 1300–1600 occur in the fit data; the others are extrapolated along
+the band slope. Stronger players are *less* predictable to Maia (more distinct
+reasonable moves), hence the earlier hint. The default setting (1350 →
+Maia-1600) gives 11 plies, about every 5–6 moves each.
+
+### Tried and dropped
+
+- **Pure best-first (A*-style) at all gaps**, priority `g + c·plies_left`:
+  exact and fast to 8 plies, but at 16 it timed out on 11 of 12 cases. Adding
+  `λ·distance` helped, not enough; best-first is now used only to 10 plies.
+- **Wider beams** (3000, 5000): no gain in path-found or top-3 within 30 s on
+  the fit split; the time goes into fewer plies.
+- **Metal backend for lc0**: 2.0 ms vs 0.6 ms per one-node eval on BLAS; same
+  policy.
+- **`beam_min_p`** (drop children below a probability): no measurable effect.
+- **Per-player fitted band** instead of the game's rating setting: the
+  likelihood surface over offsets is flat; the setting is the input.
+- **FEN-string keys**: replaced by `_transposition_key()` and bitboard masks;
+  with per-side memoisation of the bound, `need()` went 8 s → 1.8 s per
+  gap-16 solve.
+- **`beam_div` 0.25**: same as 0 on the fit split.
+
+---
+
+# Kept until Phase 5
+
+September grid finder (`calibrate.py`, `rectify.py`); nothing in the photo flow depends on it.
+
+### Calibration (Phase 2)
 
 ```python
 from engine.calibrate import calibrate
@@ -212,7 +382,7 @@ board is much cheaper than a wrong one.
 
 ---
 
-## Rectification (Phase 2)
+### Rectification (Phase 2)
 
 The rectified board always has **a8 top-left and h1 bottom-right** — white at
 the bottom, like a diagram — whatever the camera is doing. Square `(file, rank)`
@@ -240,269 +410,3 @@ pointing from the board toward the camera.
 
 ---
 
-## Tracking (Phase 3)
-
-```python
-from engine.tracker import track_game
-result = track_game("data/synth/shallow/002-immortal-1851")
-print(result.san, result.flagged)
-```
-
-or incrementally, which is how the server runs it during a live game:
-
-```python
-tracker = Tracker(calibration, frame0_bgr, params)
-for seq, paths in frame_paths(game_dir)[1:]:
-    tracker.add_frame(seq, paths)
-result = tracker.result()
-```
-
-`Tracker.constrain(ply, move)` returns a **new** tracker with that ply pinned and
-the whole game re-run, which is what a correction on the review page does.
-
-### `TrackResult`
-
-| field | meaning |
-|---|---|
-| `moves` | the move list, `chess.Move` |
-| `plies` | one `PlyInfo` each: `san`, `uci`, `seq`, `margin`, `flags`, `candidates` |
-| `frames` | one record per capture: blob count, change mass, alignment shift, warnings |
-| `board` | the final position |
-| `calibration`, `camera` | what the geometry ended up being |
-
-`PlyInfo.seq` is the capture the ply was read from. It is **not** `index + 1`:
-a missed press puts two plies on one capture and a double press puts none on it,
-and the review page needs to show the right photograph.
-
-`PlyInfo.candidates` is what Phase 4 puts to the vision model — the top few
-moves at the frame that decided this ply, each with its log-likelihood.
-
-### Flags
-
-| flag | meaning | who resolves it |
-|---|---|---|
-| `low_margin` | the ply's margin is under `tau` nats | Phase 4 LLM, else the review page |
-| `unexplained` | even the best candidate scored below `divergence_floor` — a hand covered the board, or the position has drifted | Phase 4 asks an open question |
-| `promotion_unknown` | **every** promotion carries this | Phase 4 LLM |
-
-`margin` is the smaller of two numbers: the **local** margin (how far the chosen
-candidate beat the best candidate that disagrees, at the frame that decided it)
-and the **global** margin (log-sum-exp of the beam paths that agree about this
-ply, minus that of the paths that disagree). Either can be the binding one — a
-ply can be obvious at its own frame and still be contradicted by later frames.
-
-Promotions are flagged without exception because the engine genuinely cannot
-name the piece: a rook and a queen differ by a quarter of a square in height and
-nothing else the camera can see. A prior that promotions are queens breaks the
-tie so the *rest* of the game is tracked against a board that is right; naming
-the piece is the LLM's job.
-
-### `engine.evaluate`
-
-```
-python -m engine.evaluate data/synth/shallow --no-llm --worst 5
-```
-
-| number | meaning |
-|---|---|
-| plies correct | **index-wise** agreement with `truth.pgn` |
-| final position ok | share of games ending on the right board |
-| wrong-ply recall | of the plies it got wrong, the share it flagged |
-| flagged per game | what that recall costs — each one is an LLM call or a human glance |
-
-Plies-correct is index-wise on purpose, and it is brutal: a game that goes out of
-step at ply 16 scores zero for every ply after it, even though the tracker is
-still following the game correctly from its own board. Read it with
-final-position-correct beside it. **Wrong-ply recall is the number that decides
-whether a game is recoverable**, and a low recall is worse than a low accuracy —
-an unflagged wrong ply is one nobody will ever look at.
-
-### Measured accuracy (Phase 3, gate NOT met)
-
-Corpora generated with the seeds above; `--no-llm` throughout; beam width 30.
-
-| corpus | plies correct | final position | wrong-ply recall | flagged/game | s/frame |
-|---|---|---|---|---|---|
-| clean (30 games) | 94.6 % | 63 % | 78 % | 10.3 | 0.16 |
-| shallow (20 games) | 74.6 % | 5 % | 57 % | 14.1 | 0.27 |
-
-The gate wanted 99.5 % on clean and 98 % on shallow. Read those numbers next to
-the per-frame ones, because the difference between them is the whole story:
-
-| corpus | true move ranked 1st | in top 3 |
-|---|---|---|
-| clean | 98.1 % | 99.9 % |
-| shallow | 88.4 % | 97.8 % |
-
-**The model is not the bottleneck; the search is.** Scoring the true move
-sequence forward and comparing it with the beam's leader, the true game scores
-**60–180 nats better in total** than the game the beam returns, and never falls
-more than **4.4–6.7 nats** behind at any prefix — and is still evicted from a
-beam of width 30. Widening does not help: 30, 80 and 200 give bit-identical
-accuracy on the failing games, because the problem is that 30-odd sequences sit
-within a few nats of each other at the frame where it dies, not that the beam is
-too small to hold the right one. The field has to be made smaller by sharpening
-the per-frame likelihood.
-
-Two cautions for whoever tunes this next:
-
-* **Every parameter here was fitted on per-frame top-1 accuracy, which is not
-  what is failing.** Fit against the beam's output instead.
-* **`score_clip` and `tau` are on the emission's scale and the scale changed.**
-  When the likelihood ratio replaced the old heuristic terms, typical margins
-  went from ~3 nats to ~40. `score_clip` was left at 8 and silently flattened
-  every frame to near-uniform, which alone took shallow from 74.6 % to 39.8 %.
-  Anything measured in nats has to be re-derived when the likelihood is rescaled.
-
----
-
-## Vision-LLM fallback (Phase 4)
-
-```python
-from engine.vision_llm import resolve_ply, Option
-
-result = resolve_ply(before_paths, after_paths, rect_before, rect_after,
-                     candidates, side_to_move, calib)
-# {"san": "Nf3" | ... | "none_of_these", "confidence": 0.0-1.0,
-#  "model": "claude-sonnet-5" | "claude-opus-5", "cost": dollars}
-```
-
-`before_paths`/`after_paths` are the raw burst frames either side of the ply
-(paths or ndarrays — the first is used, burst selection already happened
-upstream). `rect_before`/`rect_after` are the same two captures already run
-through `engine.rectify.rectify`. `candidates` is a list of `Option(label,
-moves)` (or an equivalent `{"label": ..., "moves": (...)}` dict) — `moves` is
-0, 1 or 2 UCI strings, and `label` must be unique within the call; it becomes
-both the enum value and the display string. The call is **forced tool use**
-(`tool_choice: {"type": "tool", "name": "choose_move"}`) against an enum of
-every label plus `"none_of_these"`, so the answer is always one of the offered
-candidates or an explicit "none of them" — never free text.
-
-**Images sent, in order:** the raw camera view before, the raw camera view
-after (both cropped to the board's bounding box plus a 15 % margin — this is
-what puts hands and the captured-piece pile in frame), then the same two
-moments rectified to a top-down view with every candidate's touched squares
-outlined in red.
-
-**Escalation.** The first call is `claude-sonnet-5`. If it answers
-`none_of_these` or its confidence is below `0.7`, a second call goes to
-`claude-opus-5` with the identical prompt and images; the returned `cost` is
-the sum of both. A model tier is never asked twice.
-
-### Caching and the call budget
-
-```python
-from engine.vision_llm import LLMResolver
-
-resolver = LLMResolver(game_dir)           # <game_dir>/llm_cache.json
-answer = resolver.resolve(str(seq), before_paths=..., after_paths=...,
-                          rect_before=..., rect_after=..., candidates=...,
-                          side_to_move=..., calib=...)
-```
-
-`LLMResolver` is what the tracker actually calls. It caches by whatever key
-the caller passes — the tracker uses the frame's capture `seq` — so replaying
-a game (a correction re-run via `Tracker.constrain`) costs nothing for frames
-already resolved. `max_calls` (default 10) is a hard ceiling on *new* calls per
-game; once spent, `resolve()` returns `None` and the ply stays flagged rather
-than the game running up an unbounded bill. The cache is a flat JSON file, one
-entry per key, read at construction and rewritten after every new call.
-
-### Beam integration (`engine/tracker.py`)
-
-Once per frame — not once per beam path — the tracker checks the **current
-leader's** own candidate scores (`self.beam[0]`, the same board every
-downstream ply is read against). If the top two candidates are closer than
-`tau` or the top score is below `divergence_floor`, and `params["use_llm"]` is
-set, it builds a label for each of the top 6 candidates (12 when
-`unexplained`, since pairs are already in `scored` by then) from
-`board.san(...)`, asks `LLMResolver`, and — if the answer names one of them —
-adds `log(confidence)` as a bonus to every path in the beam whose candidate at
-that frame shares the exact same move signature (by UCI, not by path
-identity, since most of the beam agrees about the current board anyway). A
-`none_of_these` or budget-exhausted answer changes nothing; the ply stays
-flagged for the review page. Cost, model and confidence are logged into that
-frame's record (`frame_rec["llm_cost"]` etc.), which is what
-`engine.evaluate`'s `llm_cost_per_game` column reads — no change was needed
-there.
-
-`params["use_llm"]` is off unless a caller sets it explicitly; `engine.evaluate`
-sets it from `--no-llm`, and the live server (`server/analysis.py`) does not
-set it, so a game in progress never triggers a paid call mid-play — only
-`engine.evaluate` and any future opt-in wiring do.
-
-### Measured accuracy (Phase 4, gate **NOT MET**, by design of the test)
-
-- `pytest tests/test_vision.py -q` (mocked): **10/10 pass** — schema, forced
-  tool choice, both escalation triggers, cost summation, confidence clamping,
-  cache reuse across `LLMResolver` instances, the call cap, and recovery from a
-  corrupt cache file.
-- `pytest tests/test_vision.py -q -m live`: 3/3 calls returned a valid,
-  schema-conforming answer (one correctly escalated to Opus on low
-  confidence); **1/3 matched truth**, short of the gate's 2/3.
-- `engine.evaluate data/synth/shallow` / `data/synth/hard` (LLM on): **not
-  run.** Diagnosis below explains why running the full ~$10–25 corpus would
-  not have told us anything the smoke test didn't, and Isaac chose to skip it
-  (2026-09-12) — this mirrors the Phase 3 gate override.
-
-**Why the smoke test fell short, and why it isn't a plumbing bug.** The three
-flagged plies it was asked about: a bishop-or-knight-to-h6 ambiguity, an
-underpromotion (rook/knight/queen/bishop), and a rook move in a cluttered,
-hand-occluded midgame frame.
-
-1. `synth/render.py` draws every piece as the same cone/cylinder silhouette,
-   distinguished only by height (Notes §A: `P<B<N<R<Q<K`, bishop ≈ 1.2×pawn).
-   A bishop and a knight at adjacent height classes are visually
-   indistinguishable in the rendered image — there is no mitre, no horse head,
-   nothing but a slightly taller cone. The model answered a real candidate
-   (`h6`, a pawn push) rather than either piece option, i.e. it could not tell
-   *any* piece moved there versus a pawn already being there. This is not
-   fixable by prompting; it needs the renderer to draw visually distinct
-   piece heads, which is out of scope for Phase 4.
-2. The rook-move frame had hands from both players resting near the board on
-   a busy midgame position — exactly the scene noise `hard` is built to
-   contain (Notes §E). The model answered "no move happened". A human glancing
-   at the same crop would plausibly make the same call.
-3. The promotion question (genuinely unresolvable by the engine itself, hence
-   always flagged) was answered *correctly* (`b1=N`) after escalating to Opus
-   on low confidence — the one case in this smoke test the vision fallback is
-   squarely meant for, and the one it got right.
-
-**The implication for Phase 6:** the synthetic corpus cannot validate the
-piece-*identity* half of what this module is for, because the renderer
-deliberately keeps pieces abstract (that abstraction is exactly what makes the
-tracker's forward model work — see Notes §C — and reworking it is a Phase 2/3
-change, not a Phase 4 one). Real photographs have real piece shapes. Phase 6
-is therefore the first point this module's actual value can be measured, and
-its cost (`$0.007`/sonnet call, `$0.024` on an escalation to Opus, from the
-smoke test's real usage) is in line with the gate's `≤ $0.15`/game budget even
-if every flagged ply in a real game escalated.
-
----
-
-## Corrections (Phase 5)
-
-A correction is a **re-run, not an edit**. `Tracker.constrain(ply, move)` (and
-`track_game(..., constraints={ply: move})`, which is what the server uses after a
-game is finished and its live tracker has been dropped) pins a ply and tracks the
-whole game again. That is the point: a ply read wrongly usually takes the plies
-after it with it, because the board the tracker was matching against was wrong
-from there on, and re-running is what puts those back.
-
-**A pinned move is forced into the candidate pool.** Each frame expands only the
-top `children_per_path` candidates per beam path, and a ply is corrected exactly
-when the truth was *not* in that handful — so with constraints in play, `_step`
-filters the full scored list by `_allowed` and takes the best `children` of
-what survives, instead of filtering the top few and often finding nothing left.
-Before this, pinning a move the frame scored poorly produced an empty game: every
-candidate was constrained away, the beam advanced no plies, and the corrected
-game came back with no moves at all.
-
-The server side (`server/review.py`) keeps the human input, not just its result:
-`labels.json` stores the pins (`corrections`) alongside the move list they
-produced (`moves`). A later engine can be re-constrained from the same pins
-without anyone labelling the game twice, and `scripts/tune.py --dry-run` promotes
-any game with a pin or a "verified" flag into `data/real/<id>/` with a
-`truth.pgn` (frames symlinked, not copied) before it fits anything.
-
-Wire contract for all of it: `docs/PROTOCOL.md` §8.

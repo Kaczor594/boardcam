@@ -1,0 +1,227 @@
+{
+ "c": 1.0,
+ "lam": 2.0,
+ "top": 5,
+ "time_box": 30.0,
+ "width": 1500,
+ "astar_budget": 2000,
+ "astar_max_gap": 10,
+ "beam_min_p": 0.0,
+ "main_share": 0.85,
+ "tune": {
+  "split": "before-cutoff",
+  "gaps": [
+   8,
+   16,
+   24
+  ],
+  "cases_per_gap": 20,
+  "grid": [
+   {
+    "lam": 1.0,
+    "width": 3000,
+    "found": 0.933,
+    "top3": 0.35,
+    "by_gap": {
+     "8": {
+      "found": 1.0,
+      "top3": 0.75,
+      "median_s": 0.1
+     },
+     "16": {
+      "found": 0.95,
+      "top3": 0.3,
+      "median_s": 22.3
+     },
+     "24": {
+      "found": 0.85,
+      "top3": 0.0,
+      "median_s": 24.0
+     }
+    }
+   },
+   {
+    "lam": 2.0,
+    "width": 3000,
+    "found": 0.967,
+    "top3": 0.367,
+    "by_gap": {
+     "8": {
+      "found": 1.0,
+      "top3": 0.8,
+      "median_s": 0.1
+     },
+     "16": {
+      "found": 0.95,
+      "top3": 0.3,
+      "median_s": 22.8
+     },
+     "24": {
+      "found": 0.95,
+      "top3": 0.0,
+      "median_s": 24.1
+     }
+    }
+   },
+   {
+    "lam": 3.0,
+    "width": 3000,
+    "found": 0.967,
+    "top3": 0.333,
+    "by_gap": {
+     "8": {
+      "found": 1.0,
+      "top3": 0.7,
+      "median_s": 0.1
+     },
+     "16": {
+      "found": 1.0,
+      "top3": 0.3,
+      "median_s": 22.7
+     },
+     "24": {
+      "found": 0.9,
+      "top3": 0.0,
+      "median_s": 24.2
+     }
+    }
+   },
+   {
+    "lam": 2.0,
+    "width": 1500,
+    "found": 0.967,
+    "top3": 0.367,
+    "by_gap": {
+     "8": {
+      "found": 1.0,
+      "top3": 0.8,
+      "median_s": 0.1
+     },
+     "16": {
+      "found": 0.95,
+      "top3": 0.3,
+      "median_s": 17.6
+     },
+     "24": {
+      "found": 0.95,
+      "top3": 0.0,
+      "median_s": 23.8
+     }
+    }
+   },
+   {
+    "lam": 2.0,
+    "width": 3000,
+    "found": 0.967,
+    "top3": 0.367,
+    "by_gap": {
+     "8": {
+      "found": 1.0,
+      "top3": 0.8,
+      "median_s": 0.1
+     },
+     "16": {
+      "found": 0.95,
+      "top3": 0.3,
+      "median_s": 22.8
+     },
+     "24": {
+      "found": 0.95,
+      "top3": 0.0,
+      "median_s": 24.1
+     }
+    }
+   },
+   {
+    "lam": 2.0,
+    "width": 5000,
+    "found": 0.967,
+    "top3": 0.367,
+    "by_gap": {
+     "8": {
+      "found": 1.0,
+      "top3": 0.8,
+      "median_s": 0.1
+     },
+     "16": {
+      "found": 0.95,
+      "top3": 0.3,
+      "median_s": 22.8
+     },
+     "24": {
+      "found": 0.95,
+      "top3": 0.0,
+      "median_s": 23.9
+     }
+    }
+   }
+  ],
+  "beam_div": {
+   "split": "before-cutoff",
+   "games": 40,
+   "seed": 1,
+   "note": "v2 = safety 0.6 + finish-on-deadline",
+   "results": {
+    "0.0": {
+     "16": {
+      "found": 0.95,
+      "top3": 0.2,
+      "median_s": 14.7
+     },
+     "24": {
+      "found": 0.825,
+      "top3": 0.0,
+      "median_s": 19.6
+     }
+    },
+    "0.5": {
+     "16": {
+      "found": 0.95,
+      "top3": 0.2,
+      "median_s": 17.1
+     },
+     "24": {
+      "found": 0.925,
+      "top3": 0.0,
+      "median_s": 20.4
+     }
+    }
+   }
+  }
+ },
+ "hint_plies": {
+  "1100": 18,
+  "1200": 17,
+  "1300": 15,
+  "1400": 14,
+  "1500": 12,
+  "1600": 11,
+  "1700": 9,
+  "1800": 8,
+  "1900": 6
+ },
+ "hint_fit": {
+  "coef": [
+   3.6843,
+   -0.3048,
+   -0.4648
+  ],
+  "cases": 300,
+  "gaps": [
+   4,
+   8,
+   12,
+   16,
+   24
+  ],
+  "bands_seen": [
+   1300,
+   1400,
+   1500,
+   1600
+  ],
+  "rule": "band of the mean of the two chess.com ratings"
+ },
+ "beam_div": 0.5,
+ "beam_v": 2
+}
