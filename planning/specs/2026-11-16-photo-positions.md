@@ -1,7 +1,7 @@
 ---
 created: 2026-11-16                 # NEVER changes
-modified: [2026-11-16, 2026-11-16]  # append-only
-sessions: [2026-11-16, 2026-11-16]  # append-only; one entry per session that touches this spec
+modified: [2026-11-16, 2026-11-16, 2026-11-17]  # append-only
+sessions: [2026-11-16, 2026-11-16, 2026-11-17]  # append-only; one entry per session that touches this spec
 commits: [d0620c2, 2b1bb2e]               # append-only; short hashes, appended as phases land
 back_refs: [planning/specs/2026-09-12-boardcam.md]
 forward_refs: []
@@ -92,7 +92,8 @@ its accuracy a repeatable measurement.
 - [x] Measure photo-only against photo-plus-grid on the 10 pilot photos and keep photo-only if it is within 0.5 points (it removes the grid dependency) — photo-only 99.7 % vs 99.5 %; **grid dropped** (see Notes)
 - [x] `engine/position.py`: rotate the read by White's home side, set side to move, build the FEN, flag illegal positions (king count, pawns on back ranks, more than 16 a side, side not to move in check)
 - [x] `engine/read_eval.py`: per-square, occupied-square, perfect-board and home-side accuracy, cost and seconds per photo, confusion pairs
-- [F] Label the remaining usable green-mat photos (about 20) as a hold-out the prompt is never tuned on. Needs Isaac, from a blank board as in the pilot. — waiting on Isaac: 22 photos, page at `data/labels/green-mat/label-holdout.html`
+- [x] Label the remaining usable green-mat photos (about 20) as a hold-out the prompt is never tuned on. Needs Isaac, from a blank board as in the pilot. — labelled 2026-11-17: 21 labelled, 1 excluded (2509, hand over board)
+- [x] Hold-out gate first failed (per-square 0.903, home-side 0.905: two diagonal photos hit `max_tokens` at 16 000). Fixed by streaming with a 64 000 cap (Amendments 2026-11-17); passes at 0.996 / 1.000.
 - [x] Write the reader and position interfaces into `docs/PROTOCOL.md` (§9)
 
 **Validation (gate — do not start Phase 2 until these pass):**
@@ -102,7 +103,7 @@ its accuracy a repeatable measurement.
 - `git grep -n "tracker\|emission\|synth" -- '*.py' '*.js' '*.toml'` → no matches
 
 **Handoff (do before stopping):**
-- [ ] Persist to `docs/PROTOCOL.md` and this spec's Notes: the final prompt variant, whether the grid was dropped, hold-out numbers, any photos excluded and why (interfaces, label-store layout, prompt variant and the grid decision done; hold-out numbers and exclusions wait on the hold-out labels)
+- [x] Persist to `docs/PROTOCOL.md` and this spec's Notes: the final prompt variant, whether the grid was dropped, hold-out numbers, any photos excluded and why
 
 **Resume with:** `/clear` → `/model opus` → `/spec build planning/specs/2026-11-16-photo-positions.md`
 Next phase reads: this spec, `docs/PROTOCOL.md`, `server/app.py`, `server/storage.py`, `static/js/clock.js` — and nothing else.
@@ -197,6 +198,7 @@ squares cut reliably from hand-held photos.
 - [ ] `static/label.html`: Fable drafts, Isaac confirms from the photo; confirmed game photos from Phase 2 flow into the same store automatically
 - [ ] Label store `data/labels/<set>/`: photo, image-frame truth, home side, session date; splits are by session date, never by square
 - [ ] Staged photos for rare pieces: queens, rooks and bishops on varied squares, several angles, both sets (needs Isaac; target 30 per set)
+- [ ] Diagonal photos: about 5 new green-mat photos taken across a corner (new split `diagonal`, never the hold-out). Test a prompt that lets the reader take any board edge as the top when no row is clearly farthest; keep it only if it does not lose accuracy on pilot + diagonal and cuts output tokens and time (added 2026-11-17)
 - [ ] `engine/gridfind.py`: four playing-area corners from a hand-held mid-game photo; must handle a mat that runs off the frame (pilot photo 2403) and the wooden board; returns a confidence that is low when it is wrong
 - [ ] Corner truth for the labelled photos (four taps each in the label tool)
 - [ ] Per-square crops from the unflattened photo, sized by square width, with the target square unambiguous (the pilot's crops leaked neighbouring pieces)
@@ -245,8 +247,11 @@ grows with data, and offer it as a reader backend.
 - The pilot's per-model reads were seeded into the cache as `reads/<model>/crop-grid/`; re-scoring them with the new `read_eval` reproduces the pilot exactly (Fable 99.5 % / 8 of 10 / home 100 %; Sonnet 98.9 / 6; Opus 95.3 / 3), which checks the scorer.
 - No server-side refusal fallback on the reader, on purpose: a read silently served by another model would be scored under the wrong name. Refusal is a `ReadError`.
 - **Photo-only vs crop-grid, Fable 5.2, pilot split (2026-11-16):** photo-only per-square 0.997, occupied 0.991, perfect 9/10, home-side 1.000, fen-correct 0.9, $0.110 and 23 s per photo; crop-grid (pilot reads) 0.995 / 0.987 / 8/10 / 1.000 / 0.8, $0.101, 17 s. Photo-only is kept: no grid finder in the read path, and Phase 2 can read a photo as uploaded. Residual errors are bishop read as pawn (one white, one black); the queen-vs-rook miss did not recur at 2576 px. One run on 10 photos (640 squares, so 0.2 points is about one square): read it as "not worse", not as an improvement. The first attempt failed with 401 because this Claude Code session had inherited the key from before it was replaced in `~/.zprofile`; a fresh login shell's key works.
+- **Hold-out, Fable 5.2, photo-only (2026-11-17):** 21 photos (2509 excluded: hand over board). Per-square 0.903, occupied 0.896, perfect 17/21, home-side 0.905, fen-correct 0.810, $0.163 and 49 s per photo. **Gate failed.** 2481 and 2799 (both taken diagonally) ended at `max_tokens` after 16 000 output tokens without an answer; scored as all 64 squares wrong, they account for the whole shortfall. On the other 19: 2 wrong squares (bishop read as pawn, queen read as rook), per-square about 0.998, home side 19/19. Likely cause: the prompt defines rows by "farthest from the camera", which has no answer on a diagonal photo, so the model keeps reasoning. A prompt change found here would be tuned on the hold-out, so it needs new diagonal photos to check it; a larger output budget is not a prompt change but costs more per read.
+- **Hold-out after the 64 000-token cap (2026-11-17), gate passed:** only 2481 and 2799 were re-read (the other 19 cached reads are unchanged). Per-square 0.996, occupied 0.992, perfect 18/21, home-side 1.000, fen-correct 0.857, $0.206 and 60 s per photo. 2481 took 18 821 output tokens, $0.80, 202 s, and has 3 wrong squares (a black knight missed, a white knight read as black, a knight where there is none); 2799 took 9 665 tokens, $0.43, 116 s, and is perfect, so the same photo can finish well inside 16 000 on another run. Errors overall: bishop→pawn, queen→rook and the three knight squares on 2481.
 - The photo hint knows only the last confirmed position and the ply count, not the current board, so its threshold is a ply count. It is meant to be easy to miss; if it is never noticed in play, raise its contrast before adding anything louder.
 
 ## Amendments
 - **2026-11-16 (Phase 1, scoring frame).** `read_eval` scores in board coordinates, not the photo frame: a diagonal photo (2378, 2481, 2483, 2799, 3045) has no well-defined "row farthest from the camera", so a photo-frame label would be arbitrary. `per-square`, `occupied-square` and `perfect-board` take the read at the best-fitting of the four orientations; `home-side` scores the reader's own call; `fen-correct` (new) is the end-to-end share. Hold-out truth is a FEN placement, entered from a blank board on a page written by the new `scripts/label_page.py` (not in Files; the Phase 5 `static/label.html` still replaces it) and merged with `--merge`. The gate thresholds are unchanged.
 - **2026-11-16 (Phase 1, removals).** `tests/test_calibrate.py` was removed with the others: it builds its frames with `synth`. `engine/calibrate.py` and `engine/rectify.py` stay (as planned) but are now covered only by `test_field_fixes.py::test_frame_checks…`. Server: `analysis.py` cut to the per-game registry plus a `finish` that reports "no reader yet"; `/camera`, the calibration push, per-press reading, manual corners and orientation matching are gone from `app.py`; corrections return 409 until the Phase 3 solver. `test_review.py` keeps payload, result, verify, lichess and finished-game tests on a fixture that writes `analysis.json` directly. `CLAUDE.md` now points at this spec (the stale `engine.evaluate`/`vision_llm` rules would have misled Phase 2).
+- **2026-11-17 (Phase 1, output cap).** The hold-out gate failed on two diagonal photos that hit `max_tokens` at 16 000. Isaac chose both fixes: now, the reader streams (`messages.stream` + `get_final_message`) with `MAX_TOKENS` 64 000, which is not a prompt change and so is fair on the hold-out; later, a prompt for diagonal photos, tested only on new diagonal photos (task added to Phase 5). Only the two failed reads were redone. Phase 2 should expect a diagonal photo to take up to a few minutes and about $0.80, and show the phone that the read is still running.

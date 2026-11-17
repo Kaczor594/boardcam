@@ -31,6 +31,7 @@ from pydantic import BaseModel
 
 DEFAULT_MODEL = "claude-fable-5-2"
 MAX_EDGE = 2576                 # long-edge pixels the current Claude models accept
+MAX_TOKENS = 64000              # output cap per read; hitting it is a ReadError
 PIECES = set("KQRBNPkqrbnp.")
 HOME_SIDES = ("top", "bottom", "left", "right", "unknown")
 
@@ -169,9 +170,12 @@ def _read_claude(images: list[Image.Image], prompt: str, model: str,
         kwargs["output_config"] = {"effort": effort}
     t0 = time.time()
     try:
-        r = client.messages.parse(model=model, max_tokens=16000,
-                                  messages=[{"role": "user", "content": content}],
-                                  output_format=_Board, **kwargs)
+        # Streamed: a read that thinks long on a hard photo (diagonal shots) can
+        # need far more than a non-streamed request may ask for.
+        with client.messages.stream(model=model, max_tokens=MAX_TOKENS,
+                                    messages=[{"role": "user", "content": content}],
+                                    output_format=_Board, **kwargs) as stream:
+            r = stream.get_final_message()
     except anthropic.RateLimitError as exc:
         raise ReadError("rate_limited", str(exc)[:300]) from exc
     except anthropic.APIStatusError as exc:

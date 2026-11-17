@@ -486,7 +486,14 @@ Two engine modules, no server wiring yet (Phase 2 adds `POST /games/{id}/photos`
   grid finder is needed. `grid_image` selects the pilot's variant (a crop of the
   mat plus the same crop with a labelled grid); it needs four corners and exists
   for comparison only. Photo-only ships: on the pilot it read 99.7 % of squares
-  against 99.5 % for crop-grid (Fable 5.2, spec Notes 2026-11-16).
+  against 99.5 % for crop-grid (Fable 5.2, spec Notes 2026-11-16). On the
+  21-photo hold-out (2026-11-17; 2509 excluded, a hand over the board) it read
+  99.6 % of squares, 18 of 21 boards perfect, White's side right on all 21, at
+  about $0.21 and 60 s a photo.
+- The request is streamed with `max_tokens` 64 000 (`reader.MAX_TOKENS`). At
+  16 000, two diagonal hold-out photos ran out before answering; with 64 000
+  they took 19 k and 10 k output tokens ($0.80 and $0.43, up to 200 s). A
+  diagonal photo is the slow, expensive case.
 - `BoardRead`: `rows` (8 strings of 8, `KQRBNPkqrbnp.`, **photo frame**: row 0
   is the row of squares farthest from the camera, column 0 the leftmost),
   `home` (side of the photo where White's home rank is: `top|bottom|left|right|unknown`),

@@ -24,11 +24,22 @@ class StubClient:
             stop_reason=stop_reason, parsed_output=parsed,
             usage=SimpleNamespace(input_tokens=6000, output_tokens=2000),
             stop_details=SimpleNamespace(category=category) if category else None)
-        self.messages = SimpleNamespace(parse=self._parse)
+        self.messages = SimpleNamespace(stream=self._stream)
 
-    def _parse(self, **kwargs):
+    def _stream(self, **kwargs):
         self.calls.append(kwargs)
-        return self.response
+        stub = self
+
+        class _Stream:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def get_final_message(self):
+                return stub.response
+        return _Stream()
 
 
 def _jpeg(w=400, h=300, orientation=None) -> bytes:
@@ -51,6 +62,7 @@ def test_a_read_returns_rows_home_and_cost():
     assert got.cost == pytest.approx((6000 * 8 + 2000 * 40) / 1e6)
     call = client.calls[0]
     assert call["model"] == "claude-fable-5-2"
+    assert call["max_tokens"] == reader.MAX_TOKENS
     kinds = [b["type"] for b in call["messages"][0]["content"]]
     assert kinds == ["image", "text"], "photo-only sends one image and the prompt"
     assert "grid" not in call["messages"][0]["content"][1]["text"]
