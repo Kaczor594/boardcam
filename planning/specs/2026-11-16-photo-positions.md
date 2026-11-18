@@ -1,7 +1,7 @@
 ---
 created: 2026-11-16                 # NEVER changes
-modified: [2026-11-16, 2026-11-16, 2026-11-17, 2026-11-17, 2026-11-17]  # append-only
-sessions: [2026-11-16, 2026-11-16, 2026-11-17, 2026-11-17, 2026-11-17]  # append-only; one entry per session that touches this spec
+modified: [2026-11-16, 2026-11-16, 2026-11-17, 2026-11-17, 2026-11-17, 2026-11-18]  # append-only
+sessions: [2026-11-16, 2026-11-16, 2026-11-17, 2026-11-17, 2026-11-17, 2026-11-18]  # append-only; one entry per session that touches this spec
 commits: [d0620c2, 2b1bb2e, 74704c3, e4c1b4d, fbff00e]               # append-only; short hashes, appended as phases land
 back_refs: [planning/specs/2026-09-12-boardcam.md]
 forward_refs: []
@@ -153,8 +153,8 @@ most likely lines and, for every ply, how likely each candidate move is.
 **Validation (gate — do not start Phase 4 until these pass):**
 - `.venv/bin/pytest -q tests/test_lines.py` → `0 failed` (includes: every returned path is legal, has exactly the requested length, and ends in B)
 - `.venv/bin/python -m engine.lines_eval --gaps 4,8 --games 200 --split after-cutoff` → `path-found >= 0.98`, `true-line-top3 >= 0.60` at gap 4
-- `.venv/bin/python -m engine.lines_eval --gaps 12,16,24 --games 200 --split after-cutoff` → `path-found >= 0.90`, median time per gap `<= 30 s`; top-1/top-3 recorded in Notes, no threshold (these gaps are expected to be ambiguous)
-  - [F] 2026-11-17: gap 12 1.000 / 10.2 s, gap 16 0.970 / 17.1 s pass; **gap 24 path-found 0.870** (median 20.7 s) fails. Waiting on Isaac's call (see Amendments).
+- `.venv/bin/python -m engine.lines_eval --gaps 12,16,24 --games 200 --split after-cutoff` → `path-found >= 0.90` at gaps 12 and 16 and `>= 0.85` at gap 24 (amended 2026-11-18), median time per gap `<= 30 s`; top-1/top-3 recorded in Notes, no threshold (these gaps are expected to be ambiguous)
+  - [x] 2026-11-17: gap 12 1.000 / 10.2 s, gap 16 0.970 / 17.1 s, gap 24 0.870 / 20.7 s. Gap 24 failed the original 0.90 and passes the amended 0.85 (see Amendments, 2026-11-18).
 - `.venv/bin/python -m engine.lines_eval --check-leak` → `0 evaluation games before cut-off`
 - `.venv/bin/python -m engine.lines_eval --hint-threshold` → prints one ply count per band, each between 6 and 60
 
@@ -162,7 +162,7 @@ most likely lines and, for every ply, how likely each candidate move is.
 - [x] Persist to `engine/README.md` and Notes: the `lines.json` schema, the chosen bands, the accuracy-by-gap table, what was tried and dropped
 
 **Resume with:** `/clear` → `/model opus` → `/spec build planning/specs/2026-11-16-photo-positions.md`
-Next phase reads: this spec, `engine/README.md` (lines section), `docs/PROTOCOL.md`, `static/js/board.js`, `server/review.py` — and nothing else.
+Next phase reads: this spec, `engine/README.md` (lines section), `docs/PROTOCOL.md`, `static/js/board.js`, `static/js/photos.js`, `server/review.py`, `server/photos.py` — and nothing else.
 
 ## Phase 4 — Review: line, arrows, graph, export
 The finished game is one page: photos with their FENs, the inferred moves
@@ -263,3 +263,4 @@ grows with data, and offer it as a reader backend.
 - **2026-11-16 (Phase 1, removals).** `tests/test_calibrate.py` was removed with the others: it builds its frames with `synth`. `engine/calibrate.py` and `engine/rectify.py` stay (as planned) but are now covered only by `test_field_fixes.py::test_frame_checks…`. Server: `analysis.py` cut to the per-game registry plus a `finish` that reports "no reader yet"; `/camera`, the calibration push, per-press reading, manual corners and orientation matching are gone from `app.py`; corrections return 409 until the Phase 3 solver. `test_review.py` keeps payload, result, verify, lichess and finished-game tests on a fixture that writes `analysis.json` directly. `CLAUDE.md` now points at this spec (the stale `engine.evaluate`/`vision_llm` rules would have misled Phase 2).
 - **2026-11-17 (Phase 1, output cap).** The hold-out gate failed on two diagonal photos that hit `max_tokens` at 16 000. Isaac chose both fixes: now, the reader streams (`messages.stream` + `get_final_message`) with `MAX_TOKENS` 64 000, which is not a prompt change and so is fair on the hold-out; later, a prompt for diagonal photos, tested only on new diagonal photos (task added to Phase 5). Only the two failed reads were redone. Phase 2 should expect a diagonal photo to take up to a few minutes and about $0.80, and show the phone that the read is still running.
 - **2026-11-17 (Phase 3, tier, files, gate).** Ran on Opus 5.5, not Fable 5: Fable was dropped from Isaac's plan (downgrade logged; no rework yet attributable to it). New files beyond Files: `engine/humanlike.json` (fitted offset, k, cut-off), `engine/solver.json` (search constants, tune log, `hint_plies`), untracked `data/players.json` (player → online accounts for the opening prior), cache `data/lines_eval/`. Building it also read the chess-insights DB schema (`~/claude-projects/chess-insights/data/chess_insights.db`, env `CHESS_INSIGHTS_DB`) and the old `engine/README.md`. Definitions: path-found counts only lines of exactly `n` plies; times are measured with 3 solves in parallel, each with 3 lc0 processes. The first gated run had gap 24 at 0.735, with 47 of 53 misses mislabelled `none`; two fixes chosen on the before-cutoff split only (beam reserves half its width for positions nearest B; time planning with a safety margin and finishing past the deadline instead of returning nothing; a pruned beam is never `complete`) raised it to 0.870 — still under 0.90. The after-cutoff split has now been looked at twice; further changes must be chosen on before-cutoff. Phase 4's `Resume with` list should also name `static/js/photos.js` and `server/photos.py`.
+- **2026-11-18 (Phase 3, gap-24 gate accepted).** Isaac chose to accept gap-24 path-found 0.870 rather than tune further: the threshold is now `>= 0.85` at gap 24 (`>= 0.90` stays for 12 and 16). Reasons: the photo hint fires at 11 plies for the default 1350 setting (6–18 across bands), so 24-ply gaps should be rare; and when a 24-ply path is found the true line is in the top 3 only 3 % of the time, so a higher found rate would not give a usable line. Alternatives considered and not taken: a 40 s time box, timing solves one at a time, and a bidirectional (meet-in-the-middle) search. The last is the real fix if long gaps turn out to be common in play; it needs a reverse move generator (un-captures, un-promotion, un-castling, en passant), a reversed pruning bound, and a join of two pruned frontiers, about as much code as `engine/lines.py`. Phase 4's manual game should note how far apart the photos actually were.
