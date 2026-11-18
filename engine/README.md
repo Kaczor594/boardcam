@@ -109,10 +109,14 @@ res.to_json()        # the lines.json "result" object below
 Solver constants live in `engine/solver.json` (written by
 `python -m engine.lines_eval --tune` and `--hint-threshold`).
 
-### `lines.json` (written per game by Phase 4)
+### `lines.json` (written per game by `server.gaps`, Phase 4)
 
 `data/games/<id>/lines.json` holds one entry per gap between consecutive
-confirmed positions (the first gap starts at the initial position, ply 0):
+confirmed positions (the first gap starts at the initial position, ply 0).
+Each entry also has `key` (a hash of everything its answer depends on, so an
+unchanged gap is reused) and `pins` (`[{"ply", "uci"}]`, moves the player
+accepted inside the gap, forced in the solve); the review contract built on it
+is `docs/PROTOCOL.md` §8:
 
 ```json
 {"game_id": "20261117-201500-a1b2",

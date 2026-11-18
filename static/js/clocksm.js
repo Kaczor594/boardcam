@@ -210,3 +210,22 @@ export class ClockSM {
     return true;
   }
 }
+
+/**
+ * Whether the camera button should glow: the plies since the last photo have
+ * reached the threshold past which the moves in between are hard to
+ * reconstruct (engine/solver.json `hint_plies`, sent in `hello`).
+ *
+ * Off before the first photo of the game, off unless the clock is running or
+ * paused, and off while either player has under one minute — a nudge must not
+ * compete with a time scramble. The next photo moves `lastPhotoPly` and so
+ * clears it.
+ */
+export const HINT_MIN_MS = 60000;
+
+export function photoHint({ state, ply, lastPhotoPly, threshold, whiteMs, blackMs }) {
+  if (lastPhotoPly == null || !threshold) return false;
+  if (state !== 'running' && state !== 'paused') return false;
+  if (Math.min(whiteMs, blackMs) < HINT_MIN_MS) return false;
+  return ply - lastPhotoPly >= threshold;
+}

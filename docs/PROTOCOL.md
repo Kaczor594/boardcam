@@ -3,11 +3,12 @@
 Authoritative contract between the phone page, the review page and the server.
 Every later phase reads this file rather than the spec.
 
-> **2026-11-17 — photo-positions spec, Phase 2.** One phone is clock and
+> **2026-11-18 — photo-positions spec, Phase 4.** One phone is clock and
 > camera. §§1–7 describe that flow (game creation, settings, the clock socket,
-> photo intake, positions). §8 is the old tracker's review contract, kept until
-> Phase 4 rewrites the review around positions and lines; its corrections return
-> 409. §9 is the reader and position interface from Phase 1.
+> photo intake, positions). §8 is the review: the moves between photos, pins,
+> the evaluation graph and the PGN. §9 is the reader and position interface
+> from Phase 1. The September tracker's frames, rectified views, corrections
+> and verify endpoints are gone.
 
 Transport: HTTP (JSON + multipart) for state and uploads, one WebSocket for
 clock events and pushes. All paths are relative to the server root, reached
@@ -25,7 +26,7 @@ September design are gone. A game still has a 4-character `room` (alphabet
 `ACDEFGHJKLMNPQRTUVWXY34679`), used only as the WebSocket path; nobody types it.
 
 Pages: `/` (entry), `/clock` (phone; `/clock?new` forces the new-game form),
-`/games` (list), `/review?game=<id>` (photos, settings; lines in Phase 4).
+`/games` (list), `/review?game=<id>` (moves, arrows, graph, PGN, photos, settings).
 
 ---
 
@@ -52,7 +53,8 @@ next game's defaults.
 ### `PATCH /api/games/{game_id}/settings`
 Body: any subset of `white_name, black_name, white_rating, black_rating,
 reader_model`. Response: all five after the change. Also updates the defaults.
-A changed reader applies to photos taken afterwards.
+A changed reader applies to photos taken afterwards; a changed name or rating
+re-solves the game's lines (§8).
 
 ### `GET /api/games`
 ```json
@@ -64,8 +66,7 @@ Newest first. `status` ∈ `ready | running | paused | finished`. `photos`
 excludes replaced photos; `plies` is the highest press count in the event log.
 
 ### `GET /api/games/{game_id}`
-`meta.json` fields plus `events` (parsed log), `positions` (§5),
-`analysis` and `calibration` (both `null` in the new flow).
+`meta.json` fields plus `events` (parsed log) and `positions` (§5).
 
 ### `DELETE /api/games/{game_id}`
 Removes the game directory.
@@ -73,7 +74,7 @@ Removes the game directory.
 ### Photo endpoints
 `POST /games/{id}/photos`, `GET /games/{id}/photos/{n}`,
 `GET /api/games/{id}/positions`, `POST /api/games/{id}/photos/{n}/confirm`,
-`POST /api/games/{id}/photos/{n}/read` — see §5.
+`POST /api/games/{id}/photos/{n}/read` — see §5. Review endpoints — §8.
 
 ---
 
@@ -110,13 +111,16 @@ game is finished: the final position is usually photographed after Stop.
 
 | Type | Payload | Meaning |
 |---|---|---|
-| `hello` | `game_id, room, status, result, seq, config{initial_ms, increment_ms, white_name, black_name, white_rating, black_rating, reader_model}, t` | on connect |
+| `hello` | `game_id, room, status, result, seq, config{initial_ms, increment_ms, white_name, black_name, white_rating, black_rating, reader_model}, hint_plies, t` | on connect |
 | `position.read` | `game_id, photo` (a §5 entry) | a read finished (also returned by the upload request) |
+| `lines.ready` | `game_id, gaps` (the §8 gap summaries) | a gap was solved (sent after each gap and when the job ends) |
 | `game.finished` | `game_id, result` | a play event was refused |
 | `pong` | `t` | heartbeat |
 
 `hello.seq` is the highest press count in the log. The page takes it as a floor
-only when its own saved state was lost (§7).
+only when its own saved state was lost (§7). `hello.hint_plies` is the photo
+hint threshold (§7) for the band of the two players' mean rating, from
+`engine/solver.json` `hint_plies` (Phase 3); `null` if the table is missing.
 
 ---
 
@@ -231,8 +235,10 @@ data/
     events.jsonl     # clock events, one JSON object per line, server_t stamped
     photos/001.jpg   # as uploaded
     positions.json   # §5
-    analysis.json    # legacy tracker output; Phase 3/4 replace it with lines
-    game.pgn         # Phase 4
+    lines.json       # §8: one solved gap per pair of consecutive anchors (engine/README.md)
+    pins.json        # §8: moves the player accepted
+    evals.json       # §8: Stockfish per FEN (evals) and top moves per FEN (top)
+    game.pgn         # §8: written after every solve and result change
 ```
 
 `game_id` is `YYYYMMDD-HHMMSS-xxxx` (local time, 4 random hex), and is
@@ -283,156 +289,136 @@ review page.
 - The page repaints from one rAF loop; a backgrounded tab freezes until it is
   foregrounded (harmless: the clock phone is in front all game).
 
+**Photo hint.** The camera button glows (a slow 3.2 s pulse of a pale ring on
+the dark control bar; a static ring under reduced motion) when
+`ClockSM`'s `photoHint()` says so: at least one photo taken in this game, the
+clock running or paused, both clocks at one minute or more, and
+`ply − (highest ply of any non-replaced photo) ≥ hello.hint_plies`. The next
+photo clears it. No sound, no text, no vibration. The default 1350/1350 game
+glows after 11 plies.
+
 ---
 
-## 8. Review and correction (legacy tracker contract, until Phase 4)
+## 8. Review: the moves between the photos
 
-The review page is a Mac-browser surface, not a phone one: it is opened from the
-games list (`/review?game=<game_id>`) after a game finishes and it is where a
-wrong ply gets fixed. Everything it needs is behind the endpoints below, and the
-tracker is re-run server-side on every correction — the page never edits a move
-list locally.
+The review page (`/review?game=<id>`) works on a Mac or a phone, during or
+after the game. It shows the game as one sequence of plies along the most
+likely line between the photos, the likely next moves and Stockfish's as
+arrows, an evaluation graph, and the PGN.
+
+**Anchors and gaps.** Anchors are the initial position (ply 0) and every
+confirmed photo (`confirmed.ply`, `confirmed.fen`; the latest photo wins when
+two share a ply), in ply order. Each consecutive pair is a gap, solved by
+`engine.lines.solve` under the game's two players (`engine.humanlike`,
+ratings and names from `meta.json`); method and the stored per-gap result:
+`engine/README.md` → Lines. A gap starts from the previous gap's top-line
+`fen_end` (castling and e.p. from the path; its ply from that FEN), or from the
+previous photo's FEN when that gap was not solved. Each gap carries a `key`
+over everything its answer depends on (start FEN, end placement, `n`, bands,
+prior flags, pins inside it, solver constants); a solve reuses every gap whose
+key is unchanged, so one more photo solves one more gap.
+
+**Solving** runs in the background, one job per game; a request while it runs
+makes the job go round once more. Triggers: a confirmed photo, a pin added or
+removed, a changed name or rating, and `POST …/solve`. lc0 and Stockfish are
+shared by all games (one job at a time). After each newly solved gap the
+server writes `lines.json` and pushes `lines.ready`; at the end it evaluates new
+positions (`evals.json`) and rewrites `game.pgn`.
 
 ### `GET /api/games/{game_id}/review`
-
-One fetch, everything the page renders.
-
 ```json
-{
-  "game_id": "20260912-143355-a7f3",
-  "room": "K4WQ",
-  "status": "finished",
-  "created_at": 1789...,
-  "white_name": "White", "black_name": "Black",
-  "result": "1-0",
-  "lichess_url": "https://lichess.org/xxxxxxxx",
-  "pending": false,
-  "pgn": "[Event \"BoardCam\"]\n…",
-  "frames": [{"seq": 0, "k": [0]}, {"seq": 1, "k": [0, 1, 2]}],
-  "labels": {"corrections": [{"ply": 12, "san": "Nxe5", "uci": "f3e5", "t": 1789...}],
-             "result": null, "verified": false, "moves": ["e4", "e5", "…"]},
-  "analysis": {
-    "moves": ["e2e4", "e7e5", "…"],
-    "plies": [
-      {"index": 0, "san": "e4", "uci": "e2e4", "seq": 1,
-       "margin": 41.8, "flags": [],
-       "candidates": [{"san": "e4", "uci": "e2e4", "n": 1, "score": -12.3},
-                      {"san": "e3", "uci": "e2e3", "n": 1, "score": -31.0}]}
-    ],
-    "frames": [{"seq": 1, "blobs": 2, "mass": 812.0, "shift": [0.4, -0.2],
-                "warnings": [], "best": -12.3, "unexplained": false,
-                "llm_cost": 0.007, "llm_model": "claude-sonnet-5",
-                "llm_confidence": 0.82, "llm_choice": "Nf3"}],
-    "final_fen": "…", "warnings": [],
-    "calibration": {...}, "camera": {...}
-  }
-}
+{"game_id": "…", "room": "K4WQ", "status": "finished", "created_at": 1794…,
+ "white_name": "Isaac", "black_name": "Guest", "white_rating": 1350, "black_rating": 1350,
+ "reader_model": "claude-fable-5-2", "result": "0-1", "lichess_url": null,
+ "plies": 52,                    // highest clock press
+ "last_photo_ply": 44,
+ "solving": false,               // a solve job is running
+ "stale": false,                 // lines.json does not match the confirmed photos yet
+ "positions": {…},               // §5
+ "gaps": [{"from": {"photo": null, "ply": 0, "fen": "…"}, "to": {"photo": 1, "ply": 11, "fen": "…"},
+           "status": "found", "complete": true, "n_requested": 11, "n_used": 11,
+           "lines": 5, "top_prob": 0.31, "secs": 3.1, "bands": {"white": 1600, "black": 1600},
+           "prior": {"white": false, "black": false}, "pins": 0}],
+ "timeline": [ … ],              // below
+ "pins": [{"ply": 3, "uci": "g1f3", "san": "Nf3", "t": 1794…}],
+ "fens": [{"photo": 1, "ply": 11, "fen": "…"}],
+ "pgn": "[Event \"BoardCam\"] …"}
 ```
+`gaps[].status`: `found`, `none` (no legal path of `n − 1…n + 1` plies: a board,
+its ply stamp, or an accepted move is wrong), `timeout`, or `order` (the photo's
+ply is before the end of the line leading to it).
 
-`pending` is `true` when the game has no `analysis.json` yet (still being played,
-or the tracker failed); `analysis` is then `null` and the page shows why.
-
-Ply fields the page depends on:
+**`timeline`** — one entry per known position, in ply order (`server.gaps.timeline`):
 
 | field | meaning |
 |---|---|
-| `index` | 0-based ply number; `index 0` is white's first move |
-| `seq` | the **capture** this ply was read from — *not* `index + 1` (a missed press puts two plies on one capture). This is the "after" image; the "before" image is the previous ply's `seq`, or `0` for `index 0` |
-| `margin` | nats of confidence; `null` means infinite (nothing disagreed) |
-| `flags` | `low_margin` (ask someone), `unexplained` (the frame made no sense — a hand over the board), `promotion_unknown` (every promotion carries this; the engine cannot name the piece) |
-| `candidates` | up to 6 alternatives at the frame that decided this ply, best first, `score` in nats |
+| `ply`, `fen` | position after `ply` plies (FEN with castling/e.p. from the path) |
+| `uci`, `san` | the move that led here (`null` at the start and after an unsolved gap) |
+| `kind` | `start`, `photo`, `inferred`, `pinned` |
+| `photo` | photo number when this position is a confirmed photo |
+| `p` | marginal probability of that move among the lines found (`null` for anchors after an unsolved gap) |
+| `certain` | a photo position, or reached from a certain one by accepted or forced moves (forced: the search was exhaustive and every line found plays it) |
+| `alts` | the marginals of the move *into* this position: `[{"uci", "san", "p"}]`, `san` may be `null` |
+| `break` | true for a photo position after an unsolved gap |
+| `eval` | `{"cp", "mate"}` from White's side (Stockfish depth 12), or `null` until evaluated |
 
-A ply with an empty `flags` is confident; a ply with any flag is what the page
-exists to show. `corrections` in `labels` marks plies a human has pinned — those
-are authoritative and re-running never changes them.
+The arrows at ply `i` are the `alts` of entry `i + 1` (the move out of the
+current position), unless that entry is a `break`.
 
-### `GET /games/{game_id}/frames/{seq}/{k}`
+### `POST /api/games/{game_id}/solve`
+Starts (or re-runs) the background solve; answers `{"ok": true, "solving": true}`
+at once. The page calls it when the payload is `stale` and nothing is solving.
 
-The raw camera JPEG (§2). `k` is the burst index; `k=0` is the one the engine
-usually used.
+### `GET /api/games/{game_id}/engine/{ply}`
+`{"ply", "fen", "moves": [{"uci", "san", "cp", "mate"}]}` — Stockfish's 3 best
+moves at the timeline position of `ply` (depth 12, cached per FEN in
+`evals.json`). `404` when no position is known at that ply.
 
-### `GET /api/games/{game_id}/rect/{seq}`
-
-The same capture **rectified** to a top-down 512×512 board (a8 top-left, h1
-bottom-right — white at the bottom, like a diagram), as JPEG.
-
-| query | meaning |
-|---|---|
-| `k` | burst index, default `0` |
-| `prev` | another capture's `seq`; squares that changed between the two are outlined in amber |
-| `squares` | comma-separated algebraic squares (`e2,e4`) outlined in red — the page passes the from/to of the candidate it is showing |
-| `size` | edge in pixels, 128–1024, default 512 |
-
-`404` if the capture or the calibration is missing.
-
-### `POST /api/games/{game_id}/corrections`
-
-```json
-{"ply": 12, "san": "Nxe5"}        // or {"ply": 12, "uci": "f3e5"}
-```
-
-Pins that ply and **re-runs the whole game** with every pinned ply constrained,
-then rewrites `analysis.json`, `game.pgn` and `labels.json`. The SAN is parsed
-against the position reached by the corrected move list, so it is the move the
-player actually sees on the board at that point.
-
-Response is the same object as `GET …/review`, plus `"changed": [12, 13, 14]` —
-the ply indices whose SAN differs from before the correction. `400` if the move
-is illegal in that position or `ply` is out of range; `409` if the game has no
-analysis to correct.
-
-This is not cheap: the re-run costs roughly a quarter-second per capture, so a
-40-move game takes some seconds. The page should show that it is working.
-
-### `DELETE /api/games/{game_id}/corrections/{ply}`
-
-Unpins one ply and re-runs. Same response shape.
+### `POST /api/games/{game_id}/pins`, `DELETE /api/games/{game_id}/pins/{ply}`
+Body `{"ply": 12, "uci": "g1f3"}`: the move played *as* ply 12 (1-based, the
+same count as the clock's presses). The move must be legal on the timeline's
+board at ply 11 (`400`), and `ply` must lie inside the photos (`409`).
+Response `{"pins": [...]}`; the gap is solved again with that ply forced (the
+solver's policy returns only the pinned move there). Delete undoes one pin
+(`404` if not pinned). Stored in `pins.json` as `{"pins": [{"ply", "uci", "san", "t"}]}`.
 
 ### `POST /api/games/{game_id}/result`
+`{"result": "1-0"}` (`1-0`, `0-1`, `1/2-1/2`, `*`; else `400`). Rewrites
+`meta.json` and `game.pgn`; response `{"ok": true, "result", "pgn"}`.
 
-```json
-{"result": "1-0"}
-```
-
-Overrides the result the clock recorded (`1-0`, `0-1`, `1/2-1/2`, `*`). Rewrites
-`game.pgn` and `meta.json`. Response: `{"ok": true, "result": "1-0", "pgn": "…"}`.
-
-### `POST /api/games/{game_id}/verify`
-
-```json
-{"verified": true}
-```
-
-Marks the current move list as **truth**: `scripts/tune.py` then exports the game
-to `data/real/<game_id>/` with a `truth.pgn` and fits the engine's parameters
-against it alongside the synthetic corpora. A game with at least one correction
-is exported too, on the grounds that someone looked at it. Response:
-`{"ok": true, "verified": true}`.
+### `GET /games/{game_id}/pgn`
+The PGN as a download (written from `lines.json` if needed; no solving).
+`engine/pgn.py`: headers Event, Date, White, Black, Result, TimeControl,
+WhiteElo/BlackElo (the settings), Annotator; every move has `[%clk h:mm:ss]`
+from the clock press with the same ply number; an inferred move adds
+`inferred NN%` (its marginal; `>99%` rather than 100 %, since it is a share of
+the lines found, not certainty); a photo position adds `photo n: <FEN>`. An
+unsolved gap ends the move list (lichess imports only legal games) with a
+comment listing the later photo FENs. Plies after the last photo are not in
+the PGN.
 
 ### `POST /api/games/{game_id}/lichess`
-
-Imports the current PGN to lichess and returns `{"url": "https://lichess.org/…"}`
-(`{"url": null}` if lichess refused or the network is down). The URL is cached in
-`meta.json`, so a second press returns the same game rather than importing twice.
+Imports the current PGN and returns `{"url": "https://lichess.org/…"}`
+(`{"url": null}` if lichess refused or the network is down). The URL is cached
+in `meta.json`, so a second press returns the same game. A PGN changed after
+the import is not re-imported.
 
 ### `DELETE /api/games/{game_id}`
+Deletes the game directory (§2). The review page asks first through `modal()`.
 
-Deletes the game directory (§2). The review page offers this behind the shared
-`modal()` confirmation — never `confirm()`.
-
-### `labels.json`
-
-```json
-{"game_id": "…", "updated_at": 1789...,
- "corrections": [{"ply": 12, "san": "Nxe5", "uci": "f3e5", "t": 1789...}],
- "result": "1-0", "verified": true,
- "moves": ["e4", "e5", "Nf3", "…"]}
-```
-
-`moves` is the full corrected move list as of the last re-run — it is what
-becomes `truth.pgn`. `corrections` is the human input that produced it, kept
-separately so a re-run with new engine parameters can be re-constrained rather
-than re-labelled.
+### Arrows and graph (page)
+Likely moves are solid moss-50 `#3E5A32` arrows, width 8 + 26·p (of a 100-unit
+square); Stockfish's are hollow terra-40 `#B96F3E` outlines; every arrow has a
+2-unit paper ring. Validated with the dataviz palette script against both board
+squares: lightness, CVD (ΔE 12.6 protan) and normal vision (ΔE 22.0) pass;
+contrast passes on the light square and warns on the dark one, which the ring,
+the hollow/solid encoding, the legend and the move tables relieve; the chroma
+floor fails as it does for every film-palette hue. A dark page would use
+moss-40 `#5F784A` / terra-30 `#D29972` (passes CVD and contrast on stone-90);
+the app has no dark theme yet. The graph is one series in ink: solid segments
+between certain positions, dashed between inferred ones, a dot at each photo,
+nothing across an unsolved gap, clamped at ±6 pawns (mate at the clamp); hover
+shows ply, move and eval, a tap jumps to the ply.
 
 ---
 

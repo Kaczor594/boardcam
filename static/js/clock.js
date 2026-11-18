@@ -2,7 +2,7 @@
 // Pure clock logic lives in clocksm.js, the board editor in board.js, shared
 // network helpers in ws.js. Protocol: docs/PROTOCOL.md.
 
-import { ClockSM } from './clocksm.js';
+import { ClockSM, photoHint } from './clocksm.js';
 import { BoardEditor } from './board.js';
 import {
   api,
@@ -99,6 +99,7 @@ let sm = new ClockSM({ initialMs: selectedPreset.initialMs, incrementMs: selecte
 let seqBase = 0;              // floor from the server if local state was lost
 let flagSent = false;
 let finishedNotice = false;
+let hintPlies = null;         // hello.hint_plies: glow the camera button past this many plies
 let photos = [];              // positions.json "photos", newest last
 let sheet = null;             // {n, file?, objectUrl?, editor, ply, retakeOf, stamp}
 
@@ -367,6 +368,7 @@ function handleServerMessage(msg) {
         save();
       }
       if (msg.status === 'finished') gameIsOver(msg.result);
+      hintPlies = msg.hint_plies ?? null;
       refreshPhotos();
       break;
     }
@@ -893,6 +895,15 @@ function render(now) {
   }
 
   el.plyLabel.textContent = `ply ${wireSeq(sm.seq)}`;
+  const shots = live().map((p) => p.ply);
+  el.cameraBtn.classList.toggle('hint', photoHint({
+    state: sm.state,
+    ply: wireSeq(sm.seq),
+    lastPhotoPly: shots.length ? Math.max(...shots) : null,
+    threshold: hintPlies,
+    whiteMs: sm.remaining('white', now),
+    blackMs: sm.remaining('black', now),
+  }));
   el.pauseResumeBtn.textContent = sm.state === 'paused' ? 'Resume' : 'Pause';
   el.pauseResumeBtn.disabled = sm.state !== 'running' && sm.state !== 'paused';
   el.stopBtn.disabled = sm.state === 'ready' || sm.state === 'stopped' || sm.state === 'flagged';

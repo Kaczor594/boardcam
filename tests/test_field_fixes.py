@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from types import SimpleNamespace
-
 import cv2
 import numpy as np
 import pytest
@@ -34,15 +31,13 @@ def test_frame_checks_flag_a_blocked_lens_and_a_small_board():
     assert frame_checks(img, small_board) == ["lens-blocked", "board-small"]
 
 
-def test_pgn_date_and_time_control_come_from_the_real_game(tmp_path):
+def test_pgn_date_and_time_control_come_from_the_real_game():
     """Real games have no clock.config event and stamp server_t in seconds."""
-    (tmp_path / "meta.json").write_text(json.dumps(
-        {"initial_ms": 600000, "increment_ms": 5000,
-         "white_name": "Isaac", "black_name": "Guest"}))
+    meta = {"initial_ms": 600000, "increment_ms": 5000,
+            "white_name": "Isaac", "black_name": "Guest"}
     events = [{"type": "clock.start", "seq": 1, "side": "white", "white_ms": 605000,
                "black_ms": 600000, "t": 1789242078277, "server_t": 1789242078.36}]
-    result = SimpleNamespace(plies=[])
-    pgn = build_pgn(result, tmp_path, events=events)
+    pgn = build_pgn(meta, events, [])
     assert '[Date "2026.09.12"]' in pgn
     assert '[TimeControl "600+5"]' in pgn
     assert '[White "Isaac"]' in pgn

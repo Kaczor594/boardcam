@@ -213,3 +213,94 @@ if (typeof document !== 'undefined' && !document.getElementById('bd-css')) {
   style.textContent = CSS;
   document.head.appendChild(style);
 }
+
+/** Photo-frame rows (home = bottom) of a FEN's placement: row 0 is rank 8. */
+export function rowsFromFen(fen) {
+  return fen.split(' ')[0].split('/').map((rank) => rank.replace(/\d/g, (d) => '.'.repeat(Number(d))));
+}
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+/** Board square centre in a 0..800 viewBox (White at the bottom). */
+function centre(sq) {
+  const file = sq.charCodeAt(0) - 97;
+  const rank = Number(sq[1]) - 1;
+  return [file * 100 + 50, (7 - rank) * 100 + 50];
+}
+
+/** Outline of an arrow from a to b with shaft width w (viewBox units). */
+function arrowPath(from, to, w) {
+  const [x1, y1] = centre(from);
+  const [x2, y2] = centre(to);
+  const len = Math.hypot(x2 - x1, y2 - y1);
+  const ux = (x2 - x1) / len;
+  const uy = (y2 - y1) / len;
+  const px = -uy;
+  const py = ux;
+  const head = Math.max(28, w * 2.2);
+  const hw = Math.max(w * 1.9, 24);
+  const sx = x1 + ux * 18;
+  const sy = y1 + uy * 18;
+  const bx = x2 - ux * head;
+  const by = y2 - uy * head;
+  const pts = [
+    [sx + px * w / 2, sy + py * w / 2], [bx + px * w / 2, by + py * w / 2],
+    [bx + px * hw / 2, by + py * hw / 2], [x2, y2],
+    [bx - px * hw / 2, by - py * hw / 2], [bx - px * w / 2, by - py * w / 2],
+    [sx - px * w / 2, sy - py * w / 2],
+  ];
+  return `M${pts.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('L')}Z`;
+}
+
+/**
+ * Draw arrows over a board container (the element BoardEditor rendered into).
+ *   arrows: [{uci, kind: 'derived'|'engine', p}] — derived width follows p.
+ */
+export function drawArrows(container, arrows) {
+  container.querySelectorAll('svg.bd-arrows').forEach((s) => s.remove());
+  const grid = container.querySelector('.bd-grid');
+  if (!grid || !arrows.length) return;
+  const svg = document.createElementNS(SVGNS, 'svg');
+  svg.setAttribute('class', 'bd-arrows');
+  svg.setAttribute('viewBox', '0 0 800 800');
+  svg.setAttribute('aria-hidden', 'true');
+  // engine arrows under derived ones; thin derived arrows on top of thick ones
+  const order = [...arrows].sort((a, b) => (a.kind === b.kind ? (b.p || 0) - (a.p || 0)
+    : a.kind === 'engine' ? -1 : 1));
+  for (const a of order) {
+    const from = a.uci.slice(0, 2);
+    const to = a.uci.slice(2, 4);
+    if (from === to) continue;
+    const w = a.kind === 'derived' ? 8 + 26 * Math.max(0, Math.min(1, a.p || 0)) : 16;
+    const d = arrowPath(from, to, w);
+    const ring = document.createElementNS(SVGNS, 'path');
+    ring.setAttribute('d', d);
+    ring.setAttribute('class', 'bd-arrow-ring');
+    svg.appendChild(ring);
+    const path = document.createElementNS(SVGNS, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('class', `bd-arrow bd-arrow-${a.kind}`);
+    svg.appendChild(path);
+  }
+  grid.style.position = 'relative';
+  grid.appendChild(svg);
+}
+
+const ARROW_CSS = `
+:root { --arrow-derived: #3E5A32; --arrow-engine: #B96F3E; --arrow-ring: var(--paper-00); }
+svg.bd-arrows { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.bd-arrow-ring { fill: none; stroke: var(--arrow-ring); stroke-width: 10; stroke-linejoin: round; opacity: 0.9; }
+.bd-arrow-derived { fill: var(--arrow-derived); fill-opacity: 0.88; stroke: none; }
+.bd-arrow-engine { fill: none; stroke: var(--arrow-engine); stroke-width: 6; stroke-linejoin: round; }
+.bd-key { display: inline-block; width: 22px; height: 10px; vertical-align: middle; margin-right: 6px;
+  border-radius: 1px; box-shadow: 0 0 0 2px var(--arrow-ring); }
+.bd-key-derived { background: var(--arrow-derived); }
+.bd-key-engine { border: 2px solid var(--arrow-engine); background: transparent; }
+`;
+
+if (typeof document !== 'undefined' && !document.getElementById('bd-arrow-css')) {
+  const style = document.createElement('style');
+  style.id = 'bd-arrow-css';
+  style.textContent = ARROW_CSS;
+  document.head.appendChild(style);
+}

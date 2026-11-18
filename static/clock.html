@@ -129,6 +129,16 @@
     }
     #control-bar #camera-btn:hover:not(:disabled) { background: var(--paper-20); }
     #control-bar #camera-btn svg { width: 18px; height: 18px; }
+    /* Photo hint: a slow, low-contrast glow once the moves since the last photo
+       are getting hard to reconstruct. No text, no sound, no vibration. */
+    #control-bar #camera-btn.hint { animation: photo-hint 3.2s ease-in-out infinite; }
+    @keyframes photo-hint {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(253, 252, 248, 0); }
+      50%      { box-shadow: 0 0 0 5px rgba(253, 252, 248, 0.28), 0 0 14px 2px rgba(253, 252, 248, 0.22); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #control-bar #camera-btn.hint { animation: none; box-shadow: 0 0 0 4px rgba(253, 252, 248, 0.3); }
+    }
 
     /* ---------- finished banner ---------- */
     #finished-banner, #board-banner {

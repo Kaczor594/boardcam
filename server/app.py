@@ -26,7 +26,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import analysis, photos, review, storage
+from . import gaps, photos, review, storage
 from .lichess import import_pgn
 from .models import CLOCK_EVENTS, READER_MODELS, SETTING_KEYS, Confirm, GameConfig, GameSettings
 from .ws import hub, now_ms
@@ -34,6 +34,11 @@ from .ws import hub, now_ms
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 app = FastAPI(title="BoardCam", version="0.2.0")
+
+
+@app.on_event("shutdown")
+async def _close_engines():
+    await asyncio.to_thread(gaps.shutdown)
 
 
 @app.middleware("http")
@@ -112,6 +117,8 @@ async def api_update_settings(game_id: str, body: GameSettings):
     meta = storage.update_meta(game_id, **fields) if fields else storage.read_meta(game_id)
     if fields:
         storage.write_defaults(fields)
+        if {"white_rating", "black_rating", "white_name", "black_name"} & fields.keys():
+            schedule_solve(game_id)      # the players changed, so the likely lines did
     return {k: meta.get(k) for k in SETTING_KEYS}
 
 
@@ -137,8 +144,6 @@ async def api_game_detail(game_id: str):
         **meta,
         "events": storage.read_events(game_id),
         "positions": storage.read_positions(game_id),
-        "analysis": storage.read_json(game_id, "analysis.json"),
-        "calibration": storage.read_json(game_id, "calibration.json"),
     }
 
 
@@ -236,104 +241,121 @@ async def get_photo(game_id: str, n: int):
 async def confirm_photo(game_id: str, n: int, body: Confirm):
     _require(game_id)
     try:
-        return await asyncio.to_thread(photos.confirm, game_id, n, body.rows,
-                                       body.home, body.ply)
+        entry = await asyncio.to_thread(photos.confirm, game_id, n, body.rows,
+                                        body.home, body.ply)
     except photos.PhotoError as exc:
         raise _photo_error(exc) from exc
-
-
-@app.get("/games/{game_id}/frames/{seq}/{k}")
-async def get_frame(game_id: str, seq: int, k: int):
-    if not storage.exists(game_id):
-        raise HTTPException(status_code=404, detail="unknown game")
-    try:
-        path = storage.frame_path(game_id, seq, k)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="no such frame")
-    return FileResponse(path, media_type="image/jpeg")
-
-
-@app.get("/api/games/{game_id}/analysis")
-async def api_analysis(game_id: str):
-    """The move list read for this game, once there is one."""
-    if not storage.exists(game_id):
-        raise HTTPException(status_code=404, detail="unknown game")
-    saved = storage.read_json(game_id, "analysis.json")
-    if saved is not None:
-        return saved
-    state = analysis.for_game(game_id)
-    return {"game_id": game_id, "plies": [], "moves": state.moves,
-            "pending": True, "error": state.error}
+    schedule_solve(game_id)
+    return entry
 
 
 @app.get("/games/{game_id}/pgn")
 async def get_pgn(game_id: str):
-    if not storage.exists(game_id):
-        raise HTTPException(status_code=404, detail="unknown game")
-    path = storage.game_dir(game_id) / "game.pgn"
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="no analysis yet")
-    return FileResponse(path, media_type="application/x-chess-pgn")
+    _require(game_id)
+    text = await asyncio.to_thread(review.ensure_pgn, game_id)
+    return Response(content=text, media_type="application/x-chess-pgn",
+                    headers={"Content-Disposition": f'attachment; filename="{game_id}.pgn"'})
 
 
 # --------------------------------------------------------------------------
-# Review and corrections (PROTOCOL.md §8)
+# Lines between photos (PROTOCOL.md §8)
 # --------------------------------------------------------------------------
+
+# One solver job per game; a request while it runs marks the game dirty and the
+# job goes round again, so the last photo or pin always gets solved.
+_solving: dict[str, asyncio.Task] = {}
+_dirty: set[str] = set()
+
 
 def _require(game_id: str) -> None:
     if not storage.exists(game_id):
         raise HTTPException(status_code=404, detail="unknown game")
 
 
+async def _push_lines(game_id: str, doc: dict) -> None:
+    room = storage.read_meta(game_id)["room"]
+    gaps_ = [review._gap_summary(g) for g in doc.get("gaps", [])]
+    await hub.send(room, "clock", {"type": "lines.ready", "game_id": game_id,
+                                   "gaps": gaps_})
+
+
+async def _solve_loop(game_id: str) -> None:
+    loop = asyncio.get_running_loop()
+    try:
+        while True:
+            _dirty.discard(game_id)
+
+            def progress(doc):
+                asyncio.run_coroutine_threadsafe(_push_lines(game_id, doc), loop)
+
+            try:
+                doc = await asyncio.to_thread(gaps.solve_game, storage.game_dir(game_id),
+                                              on_gap=progress)
+                await _push_lines(game_id, doc)
+            except Exception as exc:       # never let a solver bug kill the server
+                print(f"[boardcam] solving {game_id} failed: {type(exc).__name__}: {exc}")
+            if game_id not in _dirty or not storage.exists(game_id):
+                break
+    finally:
+        _solving.pop(game_id, None)
+
+
+def schedule_solve(game_id: str) -> None:
+    """Solve the game's gaps in the background (cached gaps cost nothing)."""
+    if game_id in _solving:
+        _dirty.add(game_id)
+        return
+    _solving[game_id] = asyncio.create_task(_solve_loop(game_id))
+
+
 @app.get("/api/games/{game_id}/review")
 async def api_review(game_id: str):
     _require(game_id)
-    return await asyncio.to_thread(review.payload, game_id)
+    return await asyncio.to_thread(review.payload, game_id, game_id in _solving)
 
 
-@app.get("/api/games/{game_id}/rect/{seq}")
-async def api_rect(game_id: str, seq: int, k: int = 0, prev: int | None = None,
-                   squares: str | None = None, size: int = 512):
-    """A capture rectified to a top-down board, with the changed squares drawn."""
+@app.post("/api/games/{game_id}/solve")
+async def api_solve(game_id: str):
+    """Make sure every gap is solved; returns at once (poll the review payload)."""
+    _require(game_id)
+    schedule_solve(game_id)
+    return {"ok": True, "solving": True}
+
+
+@app.get("/api/games/{game_id}/engine/{ply}")
+async def api_engine(game_id: str, ply: int):
+    """Stockfish's top moves at the position of ``ply`` on the timeline."""
     _require(game_id)
     try:
-        blob = await asyncio.to_thread(review.rect_jpeg, game_id, seq, k, prev,
-                                       squares, size)
+        return await asyncio.to_thread(review.top_moves, game_id, ply)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return Response(content=blob, media_type="image/jpeg",
-                    headers={"Cache-Control": "no-store"})
 
 
-@app.post("/api/games/{game_id}/corrections")
-async def api_correct(game_id: str, body: dict):
-    """Pin one ply to the move that was actually played and re-run the game."""
+@app.post("/api/games/{game_id}/pins")
+async def api_pin(game_id: str, body: dict):
+    """Accept a move at one ply; the gap around it is solved again."""
     _require(game_id)
-    ply = body.get("ply")
-    if not isinstance(ply, int):
-        raise HTTPException(status_code=400, detail="ply must be an integer")
+    ply, uci = body.get("ply"), body.get("uci")
+    if not isinstance(ply, int) or not isinstance(uci, str):
+        raise HTTPException(status_code=400, detail="needs ply (int) and uci (str)")
     try:
-        return await asyncio.to_thread(review.apply_correction, game_id, ply,
-                                       body.get("san"), body.get("uci"))
+        pins = await asyncio.to_thread(review.add_pin, game_id, ply, uci)
     except LookupError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    schedule_solve(game_id)
+    return {"pins": pins}
 
 
-@app.delete("/api/games/{game_id}/corrections/{ply}")
-async def api_uncorrect(game_id: str, ply: int):
+@app.delete("/api/games/{game_id}/pins/{ply}")
+async def api_unpin(game_id: str, ply: int):
     _require(game_id)
     try:
-        return await asyncio.to_thread(review.drop_correction, game_id, ply)
+        pins = await asyncio.to_thread(review.drop_pin, game_id, ply)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    schedule_solve(game_id)
+    return {"pins": pins}
 
 
 @app.post("/api/games/{game_id}/result")
@@ -345,14 +367,6 @@ async def api_set_result(game_id: str, body: dict):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.post("/api/games/{game_id}/verify")
-async def api_verify(game_id: str, body: dict | None = None):
-    """Mark the move list as truth."""
-    _require(game_id)
-    want = True if body is None else bool(body.get("verified", True))
-    return await asyncio.to_thread(review.set_verified, game_id, want)
-
-
 @app.post("/api/games/{game_id}/lichess")
 async def api_lichess(game_id: str):
     """Import the current PGN, once. A second press returns the same game."""
@@ -360,10 +374,8 @@ async def api_lichess(game_id: str):
     meta = storage.read_meta(game_id)
     if meta.get("lichess_url"):
         return {"url": meta["lichess_url"]}
-    path = storage.game_dir(game_id) / "game.pgn"
-    if not path.exists():
-        raise HTTPException(status_code=409, detail="no PGN to import yet")
-    url = await import_pgn(path.read_text())
+    text = await asyncio.to_thread(review.ensure_pgn, game_id)
+    url = await import_pgn(text)
     if url:
         storage.update_meta(game_id, lichess_url=url)
     return {"url": url}
@@ -388,8 +400,20 @@ def _hello(game_id: str, room: str) -> dict:
             "increment_ms": meta["increment_ms"],
             **{k: meta.get(k) for k in SETTING_KEYS},
         },
+        "hint_plies": hint_plies(meta),
         "t": now_ms(),
     }
+
+
+def hint_plies(meta: dict) -> int | None:
+    """Plies since the last photo after which the camera button glows: the
+    Phase 3 threshold for the band of the two players' mean rating."""
+    from engine.humanlike import band_for
+    from engine.lines import load_solver_config
+
+    table = load_solver_config().get("hint_plies") or {}
+    mean = (meta.get("white_rating", 1350) + meta.get("black_rating", 1350)) / 2
+    return table.get(str(band_for(mean)))
 
 
 def _status_for(event_type: str, current: str) -> str | None:

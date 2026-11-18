@@ -223,32 +223,6 @@ def write_defaults(values: dict) -> None:
     tmp.replace(path)
 
 
-def frame_path(game_id: str, seq: int, k: int) -> Path:
-    if not (0 <= seq <= 9999 and 0 <= k <= 9):
-        raise ValueError(f"frame out of range: seq={seq} k={k}")
-    return game_dir(game_id) / "frames" / f"{seq:04d}_{k}.jpg"
-
-
-def write_frame(game_id: str, seq: int, k: int, blob: bytes) -> Path:
-    path = frame_path(game_id, seq, k)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".jpg.tmp")
-    tmp.write_bytes(blob)
-    tmp.replace(path)
-    return path
-
-
-def frame_inventory(game_id: str) -> list[dict]:
-    """[{'seq': 1, 'k': [0,1,2]}, ...] sorted by seq."""
-    by_seq: dict[int, list[int]] = {}
-    for p in sorted((game_dir(game_id) / "frames").glob("[0-9]" * 4 + "_?.jpg")):
-        seq_s, k_s = p.stem.split("_")
-        by_seq.setdefault(int(seq_s), []).append(int(k_s))
-    return [{"seq": s, "k": sorted(ks)} for s, ks in sorted(by_seq.items())]
-
-
-
-
 def count_plies(game_id: str) -> int:
     """Highest press sequence seen. Exact ply count is the engine's job."""
     best = 0

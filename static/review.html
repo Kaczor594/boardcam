@@ -7,80 +7,71 @@
 <link rel="stylesheet" href="/static/css/boardcam.css">
 <style>
   .wrap.wide { max-width: 1100px; }
-
   header.page { display: flex; align-items: baseline; gap: var(--space-4); flex-wrap: wrap; }
-  .gid { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-3); }
 
   #game-header { margin-bottom: var(--space-5); }
-  #header-actions { flex-wrap: wrap; }
   #meta-line { margin: var(--space-1) 0 0; }
-  #result-row, #verify-row { margin-top: var(--space-4); align-items: center; }
+  #result-row { margin-top: var(--space-4); align-items: center; }
+  #solve-line { margin: var(--space-3) 0 0; font-size: var(--text-sm); }
+  #solve-line.warn { color: var(--warning); }
 
-  /* Two-column desktop layout: move list stays put, detail pane does the
-     work. Stacks to one column once there is no room for both. */
-  .review-grid {
-    display: grid;
-    grid-template-columns: minmax(240px, 320px) 1fr;
-    gap: var(--space-5);
-    align-items: start;
+  .review-grid { display: grid; grid-template-columns: minmax(300px, 460px) 1fr;
+    gap: var(--space-5); align-items: start; }
+  @media (max-width: 820px) { .review-grid { grid-template-columns: minmax(0, 1fr); } }
+  .review-grid > *, #game-header .row > * { min-width: 0; }
+  #players, #meta-line { overflow-wrap: anywhere; }
+  @media (max-width: 480px) {
+    .nav { gap: var(--space-1); flex-wrap: nowrap; }
+    .nav .btn { min-width: 0; padding: 0 var(--space-3); }
+    #ply-label { min-width: 0; flex: 1 1 auto; }
+    #game-header .btn { min-height: 36px; padding: 0 var(--space-3); font-size: var(--text-sm); }
   }
-  @media (max-width: 760px) {
-    .review-grid { grid-template-columns: 1fr; }
-  }
 
-  #movelist-card { position: sticky; top: var(--space-5); }
-  @media (max-width: 760px) { #movelist-card { position: static; } }
+  #board-card .bd { max-width: 460px; }
+  .nav { justify-content: center; margin-top: var(--space-3); }
+  .nav .btn { min-width: 44px; font-family: var(--font-mono); }
+  #ply-label { font-family: var(--font-mono); font-size: var(--text-sm); min-width: 9em; text-align: center; }
+  #ply-state { margin: var(--space-2) 0 0; text-align: center; font-size: var(--text-sm); color: var(--fg-2); }
+  .legend { display: flex; gap: var(--space-4); flex-wrap: wrap; justify-content: center;
+    font-size: var(--text-xs); color: var(--fg-2); margin-top: var(--space-3); }
 
-  .movelist-scroll { max-height: 60vh; overflow-y: auto; }
+  .cands { list-style: none; margin: 0; padding: 0; }
+  .cands li { display: grid; grid-template-columns: 4.5em 1fr auto; gap: var(--space-3); align-items: center;
+    padding: var(--space-2) 0; border-top: 1px solid var(--line-1); font-size: var(--text-sm); }
+  .cands .mv { font-family: var(--font-mono); }
+  .cands .bar { height: 6px; background: var(--bg-sunken); border-radius: var(--radius-xs); overflow: hidden; }
+  .cands .bar span { display: block; height: 100%; background: var(--arrow-derived); }
+  .cands .pct { font-family: var(--font-mono); color: var(--fg-2); font-variant-numeric: tabular-nums; }
+  .cands .btn { min-height: 32px; padding: 0 var(--space-3); font-size: var(--text-xs); }
+  h3 .key { margin-left: var(--space-2); }
+
+  .movelist-scroll { max-height: 420px; overflow-y: auto; }
   table.movelist { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: var(--text-sm); }
-  table.movelist td { padding: 2px 4px; vertical-align: top; }
-  table.movelist td.movenum { color: var(--fg-3); text-align: right; padding-right: var(--space-2); width: 2.2em; }
-  .ply { display: inline-block; cursor: pointer; padding: 2px 6px; border-radius: var(--radius-sm); }
+  table.movelist td { padding: 1px 4px; vertical-align: top; }
+  table.movelist td.movenum { color: var(--fg-3); text-align: right; width: 2.6em; }
+  .ply { display: inline-block; cursor: pointer; padding: 1px 6px; border-radius: var(--radius-sm);
+    border: 0; background: none; font: inherit; color: var(--fg-3); }
+  .ply.certain { color: var(--fg-1); }
+  .ply.pinned { color: var(--fg-1); text-decoration: underline; text-underline-offset: 3px; }
   .ply:hover { background: var(--bg-sunken); }
-  .ply.selected { background: var(--brand-soft); box-shadow: inset 0 0 0 1px var(--moss-30); }
-  .ply.flash { animation: ply-flash 1.6s var(--ease-out); }
-  @keyframes ply-flash {
-    0%   { background: var(--moss-20); }
-    100% { background: transparent; }
-  }
+  .ply.selected { background: var(--brand-soft); color: var(--fg-1); }
+  .tag { font-size: 10px; color: var(--fg-3); margin-left: 2px; }
+  .gapnote td { color: var(--warning); font-family: var(--font-sans); font-size: var(--text-xs); padding: 4px; }
 
-  .badge {
-    display: inline-block;
-    font-family: var(--font-mono);
-    font-size: 10px;
-    line-height: 1.5;
-    padding: 0 4px;
-    margin-left: 4px;
-    border-radius: var(--radius-xs);
-    vertical-align: middle;
-    white-space: nowrap;
-  }
-  .badge-warn   { background: var(--terra-10); color: var(--terra-50); border: 1px solid var(--terra-30); }
-  .badge-error  { background: rgba(166, 56, 38, 0.08); color: var(--negative); border: 1px solid var(--negative); }
-  .badge-pinned { background: var(--brand-soft); color: var(--moss-60); border: 1px solid var(--moss-30); }
+  #graph-card { margin-top: var(--space-5); }
+  #graph { position: relative; }
+  #graph svg { display: block; width: 100%; height: 220px; touch-action: none; }
+  #graph .tip { position: absolute; pointer-events: none; background: var(--bg-raised); border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm); padding: 4px 8px; font-size: var(--text-xs); font-family: var(--font-mono);
+    box-shadow: var(--shadow-2); white-space: nowrap; }
+  .graph-legend { display: flex; gap: var(--space-4); flex-wrap: wrap; font-size: var(--text-xs); color: var(--fg-2); }
+  .graph-legend svg { vertical-align: middle; margin-right: 4px; }
 
-  #detail-card { min-height: 200px; }
-  #detail-title { margin-bottom: var(--space-2); }
-  #detail-flags { margin-bottom: var(--space-4); }
+  #pgn-card { margin-top: var(--space-5); }
+  #pgn-text { margin: 0; max-height: 40vh; overflow: auto; font-family: var(--font-mono);
+    font-size: var(--text-xs); white-space: pre-wrap; word-break: break-word; }
 
-  .frame-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-3);
-    margin-bottom: var(--space-5);
-  }
-  .frame-grid figure { margin: 0; }
-  .frame-grid img {
-    width: 100%;
-    max-width: 100%;
-    height: auto;
-    display: block;
-    background: var(--bg-sunken);
-    border: 1px solid var(--line-1);
-    border-radius: var(--radius-sm);
-    min-height: 60px;
-  }
-  .frame-grid figcaption { font-size: var(--text-xs); color: var(--fg-3); margin-top: var(--space-1); text-align: center; }
+  #photos-card { margin-top: var(--space-5); }
   .ph-settings-grid { display: grid; grid-template-columns: 1fr 7em; gap: var(--space-2) var(--space-3); max-width: 440px; }
   .ph-settings-grid label { margin: 0; }
   .ph-list { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
@@ -94,50 +85,6 @@
   .ph-fen { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-2); word-break: break-all; }
   .ph-editor { grid-column: 1 / -1; }
   .ph-flags { color: var(--negative); font-size: var(--text-sm); }
-  .img-fallback { font-size: var(--text-xs); color: var(--fg-3); text-align: center; padding: var(--space-4) 0; }
-  @media (max-width: 480px) { .frame-grid { grid-template-columns: 1fr; } }
-
-  .candidates { list-style: none; margin: 0 0 var(--space-5); padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
-  .candidate-row {
-    display: flex;
-    justify-content: space-between;
-    gap: var(--space-3);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--line-1);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-  }
-  .candidate-row:hover { background: var(--bg-sunken); }
-  .candidate-row.top { border-color: var(--moss-30); }
-  .candidate-row .delta { color: var(--fg-3); }
-
-  .kv-strip { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-5); }
-  .kv {
-    font-family: var(--font-mono);
-    font-size: var(--text-xs);
-    color: var(--fg-2);
-    background: var(--bg-sunken);
-    border: 1px solid var(--line-1);
-    border-radius: var(--radius-sm);
-    padding: 2px 6px;
-  }
-
-  #correction-block .row { align-items: stretch; }
-  #san-input { max-width: 220px; }
-  #correction-status { font-size: var(--text-sm); color: var(--fg-3); }
-
-  #pgn-card { margin-top: var(--space-5); }
-  #pgn-text {
-    margin: 0;
-    max-height: 40vh;
-    overflow: auto;
-    font-family: var(--font-mono);
-    font-size: var(--text-sm);
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
 </style>
 </head>
 <body>
@@ -150,6 +97,83 @@
     <span class="spacer"></span>
     <a href="/games">All games</a>
   </header>
+
+  <p class="muted" id="status-msg"></p>
+
+  <div id="content" hidden>
+    <section class="card" id="game-header">
+      <div class="row" style="justify-content: space-between; align-items: flex-start;">
+        <div>
+          <h2 id="players" style="margin-bottom: var(--space-1);"></h2>
+          <p class="muted num" id="meta-line"></p>
+        </div>
+        <div class="row">
+          <a class="btn" id="pgn-download" href="#" download>Download PGN</a>
+          <button type="button" class="btn" id="copy-pgn-btn">Copy PGN</button>
+          <button type="button" class="btn" id="copy-fens-btn">Copy FENs</button>
+          <button type="button" class="btn" id="lichess-btn">Import to lichess</button>
+          <a class="btn" id="lichess-link" href="#" target="_blank" rel="noopener" hidden>Open in lichess</a>
+          <button type="button" class="btn btn-danger" id="delete-btn">Delete game</button>
+        </div>
+      </div>
+      <div class="row" id="result-row">
+        <span class="eyebrow">Result</span>
+        <div class="chip-row" id="result-chips"></div>
+      </div>
+      <p class="muted num" id="solve-line"></p>
+    </section>
+
+    <div class="review-grid">
+      <section class="card" id="board-card">
+        <div id="board"></div>
+        <div class="row nav">
+          <button type="button" class="btn" id="nav-first" aria-label="Start">|‹</button>
+          <button type="button" class="btn" id="nav-prev" aria-label="Previous ply">‹</button>
+          <span id="ply-label" class="num"></span>
+          <button type="button" class="btn" id="nav-next" aria-label="Next ply">›</button>
+          <button type="button" class="btn" id="nav-last" aria-label="Last ply">›|</button>
+        </div>
+        <p id="ply-state"></p>
+        <div class="legend">
+          <span><span class="bd-key bd-key-derived"></span>likely moves (width = probability)</span>
+          <span><span class="bd-key bd-key-engine"></span>Stockfish's best moves</span>
+        </div>
+      </section>
+
+      <div class="stack">
+        <section class="card">
+          <h3>Next move <span class="muted" id="next-note" style="font-weight: 400; font-size: var(--text-sm);"></span></h3>
+          <ul class="cands" id="derived-list"></ul>
+          <h3 style="margin-top: var(--space-5);">Stockfish</h3>
+          <ul class="cands" id="engine-list"></ul>
+        </section>
+        <section class="card">
+          <h3>Moves</h3>
+          <p class="muted" style="font-size: var(--text-xs); margin: 0 0 var(--space-2);">Dark: photographed, accepted or forced. Grey: inferred. Underlined: accepted by you.</p>
+          <div class="movelist-scroll">
+            <table class="movelist"><tbody id="move-rows"></tbody></table>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <section class="card" id="graph-card">
+      <h3 style="margin-bottom: var(--space-1);" id="graph-title">Evaluation</h3>
+      <p class="muted" style="font-size: var(--text-sm); margin: 0 0 var(--space-3);">Stockfish, pawns from White's side, clamped at ±6. Tap a ply to jump to it.</p>
+      <div id="graph"></div>
+      <div class="graph-legend">
+        <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--fg-1)" stroke-width="2"/></svg>certain positions</span>
+        <span><svg width="26" height="8"><line x1="0" y1="4" x2="26" y2="4" stroke="var(--fg-1)" stroke-width="2" stroke-dasharray="3 3"/></svg>inferred between photos</span>
+        <span><svg width="12" height="12"><circle cx="6" cy="6" r="4" fill="var(--fg-1)" stroke="var(--bg-raised)" stroke-width="2"/></svg>photo</span>
+      </div>
+      <p class="muted" style="font-size: var(--text-xs); margin: var(--space-2) 0 0;">Source: Stockfish depth 12 on the most likely line; inferred plies are a best guess.</p>
+    </section>
+
+    <section class="card" id="pgn-card">
+      <h3>PGN</h3>
+      <pre id="pgn-text"></pre>
+    </section>
+  </div>
 
   <section class="card stack" id="photos-card" hidden>
     <div class="row">
@@ -167,86 +191,12 @@
         <label>Rating <input name="black_rating" type="number" min="100" max="3500"></label>
       </div>
       <label>Board reader <select name="reader_model"></select></label>
-      <p class="muted" style="font-size: var(--text-xs); margin: 0;">Ratings on the chess.com scale. A new reader applies to photos taken after the change.</p>
+      <p class="muted" style="font-size: var(--text-xs); margin: 0;">Ratings on the chess.com scale; changing them solves the moves again. A new reader applies to photos taken after the change.</p>
       <div class="row"><button type="submit" class="btn btn-primary">Save settings</button></div>
     </form>
 
     <div id="ph-list" class="ph-list"></div>
   </section>
-
-  <p class="muted" id="status-msg"></p>
-
-  <div id="content" hidden>
-    <section class="card" id="game-header">
-      <div class="row" style="justify-content: space-between; align-items: flex-start;">
-        <div>
-          <h2 id="players" style="margin-bottom: var(--space-1);"></h2>
-          <p class="muted num" id="meta-line"></p>
-        </div>
-        <div class="row" id="header-actions">
-          <button type="button" class="btn" id="copy-pgn-btn">Copy PGN</button>
-          <button type="button" class="btn" id="lichess-btn">Open in lichess</button>
-          <a class="btn" id="lichess-link" href="#" target="_blank" rel="noopener" hidden>Open in lichess</a>
-          <button type="button" class="btn btn-danger" id="delete-btn">Delete game</button>
-        </div>
-      </div>
-
-      <div class="row" id="result-row">
-        <span class="eyebrow">Result</span>
-        <div class="chip-row" id="result-chips"></div>
-      </div>
-
-      <div class="row" id="verify-row">
-        <button type="button" class="chip" id="verify-toggle" aria-pressed="false">Confirm this game is correct</button>
-        <span class="muted" style="font-size: var(--text-sm);">Marks the current move list as training truth.</span>
-      </div>
-    </section>
-
-    <div class="review-grid">
-      <section class="card" id="movelist-card">
-        <h3>Moves</h3>
-        <div class="movelist-scroll">
-          <table class="movelist"><tbody id="move-rows"></tbody></table>
-        </div>
-      </section>
-
-      <section class="card" id="detail-card">
-        <p class="muted" id="detail-empty">Select a ply to inspect it.</p>
-        <div id="detail-body" hidden>
-          <h3 id="detail-title"></h3>
-          <div class="chip-row" id="detail-flags"></div>
-
-          <div class="frame-grid">
-            <figure><img id="img-raw-before" alt="before, raw"><figcaption>Before (raw)</figcaption></figure>
-            <figure><img id="img-raw-after" alt="after, raw"><figcaption>After (raw)</figcaption></figure>
-            <figure><img id="img-rect-before" alt="before, rectified"><figcaption>Before (rectified)</figcaption></figure>
-            <figure><img id="img-rect-after" alt="after, rectified"><figcaption>After (rectified)</figcaption></figure>
-          </div>
-
-          <h3>Candidates</h3>
-          <ul class="candidates" id="candidates-list"></ul>
-
-          <h3>Frame record</h3>
-          <div class="kv-strip" id="frame-kv"></div>
-
-          <div class="stack" id="correction-block">
-            <label for="san-input">Correction (SAN)</label>
-            <div class="row">
-              <input type="text" id="san-input" placeholder="e.g. Nxe5" autocomplete="off">
-              <button type="button" class="btn btn-primary" id="correct-btn">Mark wrong &rarr; correct</button>
-              <button type="button" class="btn" id="unpin-btn" hidden>Unpin</button>
-              <span id="correction-status" hidden>Re-running&hellip;</span>
-            </div>
-          </div>
-        </div>
-      </section>
-    </div>
-
-    <section class="card" id="pgn-card">
-      <h3>PGN</h3>
-      <pre id="pgn-text"></pre>
-    </section>
-  </div>
 </main>
 
 <script type="module" src="/static/js/photos.js"></script>

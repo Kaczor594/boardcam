@@ -65,6 +65,7 @@ form.addEventListener('submit', async (e) => {
     Object.assign(meta, await api(`/api/games/${gameId}/settings`, { method: 'PATCH', body }));
     renderHeader();
     toast('Settings saved');
+    window.dispatchEvent(new Event('boardcam:changed'));
   } catch (err) {
     toast(`Not saved: ${err.message}`);
   }
@@ -175,6 +176,7 @@ function openEditor(p, item) {
       renderHeader();
       renderList();
       toast('Board confirmed');
+      window.dispatchEvent(new Event('boardcam:changed'));
     } catch (err) {
       flags.hidden = false;
       flags.textContent = err.status === 422 && err.detail && err.detail.flags

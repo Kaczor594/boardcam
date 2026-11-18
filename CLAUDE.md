@@ -16,5 +16,8 @@ The September stand-camera spec is abandoned and kept for history only.
 - Claude reader calls use `ANTHROPIC_API_KEY` from the environment (personal key);
   load the `claude-api` skill before touching `engine/reader.py`. Unit tests stub
   the client; anything that hits the real API is marked `live`.
+- Moves between photos: `server/gaps.py` drives `engine.lines` (lc0 + Maia) and
+  Stockfish; tests stub both (`tests/conftest.py`). Scripts that touch the
+  engines must call `server.gaps.shutdown()` before exiting.
 - Session context and the open field-test issues live in `CLAUDE_HANDOFF.md`.
 - Commit per phase; append the short hash to the spec's `commits`.

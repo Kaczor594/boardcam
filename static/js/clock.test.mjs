@@ -299,3 +299,37 @@ describe('board.js mirrors engine/position.py', () => {
     }
   });
 });
+
+import { photoHint } from './clocksm.js';
+
+describe('photo hint', () => {
+  const base = { state: 'running', ply: 20, lastPhotoPly: 8, threshold: 11, whiteMs: 300000, blackMs: 300000 };
+
+  test('off before the first photo of the game', () => {
+    assert.equal(photoHint({ ...base, lastPhotoPly: null }), false);
+  });
+
+  test('on once the plies since the last photo reach the threshold', () => {
+    assert.equal(photoHint({ ...base, ply: 18 }), false);   // 10 since the photo
+    assert.equal(photoHint({ ...base, ply: 19 }), true);    // 11
+    assert.equal(photoHint(base), true);
+    assert.equal(photoHint({ ...base, state: 'paused' }), true);
+  });
+
+  test('off while either clock is under one minute, and back once it is not', () => {
+    assert.equal(photoHint({ ...base, whiteMs: 59999 }), false);
+    assert.equal(photoHint({ ...base, blackMs: 30000 }), false);
+    assert.equal(photoHint({ ...base, whiteMs: 60000 }), true);
+  });
+
+  test('off after a photo', () => {
+    assert.equal(photoHint({ ...base, lastPhotoPly: 20 }), false);
+  });
+
+  test('off without a threshold, or once the game is over', () => {
+    assert.equal(photoHint({ ...base, threshold: null }), false);
+    assert.equal(photoHint({ ...base, state: 'stopped' }), false);
+    assert.equal(photoHint({ ...base, state: 'flagged' }), false);
+    assert.equal(photoHint({ ...base, state: 'ready' }), false);
+  });
+});

@@ -36,13 +36,30 @@ Click through it **once per phone, per browser session** before the game
 starts. The app's own requests set `ngrok-skip-browser-warning: 1` so uploads
 and the WebSocket are never intercepted; only the initial navigation is.
 
-If the click-through becomes annoying, ## 3. One-time: the reader's API key
+## 3. One-time: the reader's API key
 
 Photos are read by Claude (Fable 5.2 by default). The server takes the key from
 `ANTHROPIC_API_KEY`; keep it in `~/.zprofile` and start the server from a new
 terminal after changing it (a shell started before the change still has the old
 key, which shows up as `api_401` on the phone). `scripts/serve.sh` refuses to
 start without it.
+
+## 3a. One-time: the engines
+
+The moves between photos come from Maia (human-like move probabilities) through
+lc0, and the evaluation graph from Stockfish.
+
+```bash
+brew install lc0 stockfish
+```
+
+Put the Maia-1 weight files `maia-1100.pb.gz` … `maia-1900.pb.gz` (CSSLab
+maia-chess v1.0 release) in `data/maia/`. Optional: an opening prior from a
+player's own online games, via the chess-insights database
+(`~/claude-projects/chess-insights/data/chess_insights.db`, or
+`CHESS_INSIGHTS_DB`) and `data/players.json`
+(`{"Isaac": ["kaczor594", "simsimlamachine"]}`: the name typed on the clock
+→ that player's accounts). Without it, Maia alone is used.
 
 ## 4. Before each game
 
@@ -72,7 +89,32 @@ It prints the URL. Then, on the phone:
    (`/games` → the game).
 
 Three or four photos a game is the intended rate: one in the opening, one or
-two in the middlegame, and the final position.
+two in the middlegame, and the final position. When the **Photo** button
+starts to glow faintly, the moves since the last photo are becoming too many
+to reconstruct reliably (11 plies at the default 1350 ratings); a photo then
+clears it. It never glows before the first photo or while either clock is
+under a minute.
+
+## 4a. After the game: review
+
+Open `/games` and the game. Every confirmed photo is an anchor; the moves
+between anchors are worked out in the background (seconds per gap) and the
+page fills in as each gap is solved.
+
+- Step through the game with ‹ › (or the arrow keys). Dark moves in the list
+  are photographed, accepted or forced; grey ones are inferred.
+- The green arrows are the likely next moves, thicker for more likely; the
+  hollow orange ones are Stockfish's best moves. Under **Next move**, **Accept**
+  the move that was actually played: the rest of that gap is worked out again
+  with it fixed. **Undo** takes it back.
+- A gap that cannot be solved is reported above the board: a wrong board or
+  ply stamp on the next photo (fix it under the photos), or an accepted move
+  that does not fit.
+- **Download PGN**, **Copy PGN**, **Copy FENs** (the photo positions), and
+  **Import to lichess**. Inferred moves carry `inferred NN%` comments.
+
+To solve a recorded game from the command line:
+`.venv/bin/python -m scripts.replay_game data/games/<id>`.
 
 ### If the page reloads
 
@@ -93,3 +135,6 @@ that was already running on the server finishes and appears on the phone.
 | Photo shows `no_board` or `max_tokens` | The board was not in frame, or the shot is hard to read | **Retake** from one side of the board |
 | "server" dot red | Tunnel or server down | The clock keeps running; photos wait until it is back |
 | Clock back at 10:00 after a reload | Private browsing (no local storage) | Use a normal Safari tab |
+| Review says "No legal sequence … reaches photo n" | That photo's board or ply is wrong, or an accepted move does not fit | Fix the board (± ply) under Photos, or undo the accepted move |
+| Review says a search "ran out of time" | A long gap (20+ plies) | Accept a move or two in that gap; take photos more often next time |
+| Review stays at "Working out the moves…" | lc0 or Stockfish missing | `brew install lc0 stockfish`; check `data/maia/` |

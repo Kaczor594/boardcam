@@ -1,514 +1,492 @@
-// Review and correction page (Phase 5). Protocol: docs/PROTOCOL.md §8.
-import { api, modal, toast } from '/static/js/ws.js';
+// Review page: the game between the photos. Protocol: docs/PROTOCOL.md §8.
+//
+// One payload (GET /api/games/{id}/review) holds the timeline: one entry per
+// ply along the most likely line between the photos. The page steps through
+// it on a board, draws the likely next moves and Stockfish's best moves as
+// arrows, lets the player accept a move (a pin, which re-solves that gap),
+// draws the evaluation graph, and exports the PGN.
+
+import { BoardEditor, drawArrows, rowsFromFen } from './board.js';
+import { api, modal, toast } from './ws.js';
 
 const gameId = new URLSearchParams(location.search).get('game');
-
-const statusMsg = document.getElementById('status-msg');
-const content = document.getElementById('content');
-
-const playersEl = document.getElementById('players');
-const metaLine = document.getElementById('meta-line');
-const copyPgnBtn = document.getElementById('copy-pgn-btn');
-const lichessBtn = document.getElementById('lichess-btn');
-const lichessLink = document.getElementById('lichess-link');
-const deleteBtn = document.getElementById('delete-btn');
-const resultChips = document.getElementById('result-chips');
-const verifyToggle = document.getElementById('verify-toggle');
-
-const moveRows = document.getElementById('move-rows');
-const detailEmpty = document.getElementById('detail-empty');
-const detailBody = document.getElementById('detail-body');
-const detailTitle = document.getElementById('detail-title');
-const detailFlags = document.getElementById('detail-flags');
-const imgRawBefore = document.getElementById('img-raw-before');
-const imgRawAfter = document.getElementById('img-raw-after');
-const imgRectBefore = document.getElementById('img-rect-before');
-const imgRectAfter = document.getElementById('img-rect-after');
-const candidatesList = document.getElementById('candidates-list');
-const frameKv = document.getElementById('frame-kv');
-const sanInput = document.getElementById('san-input');
-const correctBtn = document.getElementById('correct-btn');
-const unpinBtn = document.getElementById('unpin-btn');
-const correctionStatus = document.getElementById('correction-status');
-const pgnText = document.getElementById('pgn-text');
-
+const $ = (id) => document.getElementById(id);
 const RESULTS = ['1-0', '0-1', '1/2-1/2', '*'];
+const CLAMP = 6;   // pawns, for the graph
 
-const state = { data: null, selected: null, busy: false };
+const state = { data: null, i: 0, engine: new Map(), poll: null, busy: false };
+const board = new BoardEditor($('board'), { rows: rowsFromFen('8/8/8/8/8/8/8/8 w - - 0 1'), home: 'bottom' });
 
-function fail(msg) {
-  statusMsg.textContent = msg;
-  content.hidden = true;
-}
-
-function setBusy(busy) {
-  state.busy = busy;
-  sanInput.disabled = busy;
-  correctBtn.disabled = busy;
-  unpinBtn.disabled = busy;
-  correctionStatus.hidden = !busy;
-  for (const chip of resultChips.querySelectorAll('.chip')) chip.disabled = busy;
-  verifyToggle.disabled = busy;
-  deleteBtn.disabled = busy;
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
 }
 
 function when(ts) {
-  const d = new Date(ts * 1000);
-  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return new Date(ts * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+const pct = (p) => (p == null ? '–' : p >= 0.995 ? '>99 %' : `${Math.round(p * 100)} %`);
+const moveName = (uci, san) => san || `${uci.slice(0, 2)}–${uci.slice(2, 4)}${uci.slice(4)}`;
+const moveNo = (ply) => `${Math.ceil(ply / 2)}${ply % 2 ? '.' : '…'}`;
+
+function fmtEval(ev) {
+  if (!ev) return '–';
+  if (ev.mate != null) return ev.mate === 0 ? 'mate' : `M${ev.mate > 0 ? '' : '−'}${Math.abs(ev.mate)}`;
+  const p = ev.cp / 100;
+  return `${p > 0 ? '+' : p < 0 ? '−' : ''}${Math.abs(p).toFixed(1)}`;
+}
+
+/* ---------------- loading ---------------- */
+
+async function load({ quiet = false } = {}) {
+  try {
+    state.data = await api(`/api/games/${gameId}/review`);
+  } catch (err) {
+    if (!quiet) $('status-msg').textContent = err.status === 404 ? 'No such game.' : `Could not load the game: ${err.message}`;
+    return;
+  }
+  $('status-msg').textContent = '';
+  $('content').hidden = false;
+  const tl = state.data.timeline;
+  if (state.i >= tl.length) state.i = tl.length - 1;
+  renderAll();
+  schedulePoll();
+}
+
+function schedulePoll() {
+  clearTimeout(state.poll);
+  const d = state.data;
+  if (d.stale && !d.solving) { solve(); return; }   // e.g. the server restarted mid-solve
+  if (d.solving || d.stale) state.poll = setTimeout(() => load({ quiet: true }), 2000);
+}
+
+async function solve() {
+  try {
+    await api(`/api/games/${gameId}/solve`, { method: 'POST' });
+  } catch (err) {
+    toast(`Could not start the solver: ${err.message}`);
+  }
+  state.data.solving = true;
+  renderSolveLine();
+  schedulePoll();
 }
 
 /* ---------------- header ---------------- */
 
 function renderHeader() {
   const d = state.data;
-  playersEl.textContent = `${d.white_name} — ${d.black_name}`;
-  const flagged = d.analysis ? d.analysis.plies.filter((p) => p.flags.length > 0).length : 0;
-  const parts = [
-    when(d.created_at),
-    d.result || '*',
-    d.status,
-    `${flagged} flagged`,
-    d.game_id,
-  ];
-  metaLine.textContent = parts.join(' · ');
+  $('players').textContent = `${d.white_name} (${d.white_rating}) – ${d.black_name} (${d.black_rating})`;
+  const photos = d.fens.length;
+  $('meta-line').textContent = [when(d.created_at), d.result || '*', `${d.plies} plies clocked`,
+    `${photos} confirmed photo${photos === 1 ? '' : 's'}`, d.game_id].join(' · ');
+  $('pgn-download').href = `/games/${gameId}/pgn`;
+  $('lichess-link').hidden = !d.lichess_url;
+  $('lichess-btn').hidden = !!d.lichess_url;
+  if (d.lichess_url) $('lichess-link').href = d.lichess_url;
+  $('pgn-text').textContent = d.pgn || '';
 
-  if (d.lichess_url) {
-    lichessLink.href = d.lichess_url;
-    lichessLink.hidden = false;
-    lichessBtn.hidden = true;
-  } else {
-    lichessLink.hidden = true;
-    lichessBtn.hidden = false;
-  }
-}
-
-function renderResultChips() {
-  resultChips.replaceChildren();
+  const chips = $('result-chips');
+  chips.replaceChildren();
   for (const value of RESULTS) {
-    const chip = document.createElement('button');
+    const chip = el('button', 'chip', value);
     chip.type = 'button';
-    chip.className = 'chip';
-    chip.textContent = value;
-    chip.setAttribute('aria-pressed', String(state.data.result === value));
+    chip.setAttribute('aria-pressed', String(d.result === value));
     chip.addEventListener('click', () => setResult(value));
-    resultChips.appendChild(chip);
+    chips.appendChild(chip);
+  }
+  renderSolveLine();
+}
+
+function renderSolveLine() {
+  const d = state.data;
+  const line = $('solve-line');
+  line.classList.remove('warn');
+  const bad = d.gaps.filter((g) => g.status !== 'found');
+  if (d.solving || d.stale) {
+    line.textContent = `Working out the moves between the photos… (${d.gaps.length} of ${d.fens.length} gaps done)`;
+  } else if (!d.fens.length) {
+    line.textContent = 'No confirmed photos yet: confirm a board below to see the moves.';
+  } else if (bad.length) {
+    line.classList.add('warn');
+    line.textContent = bad.map((g) => (g.status === 'none'
+      ? (g.pins
+        ? `No legal sequence of ${g.n_requested} plies with your accepted moves reaches photo ${g.to.photo}: undo one of them.`
+        : `No legal sequence of ${g.n_requested} plies reaches photo ${g.to.photo}: check that board or its ply.`)
+      : g.status === 'order' ? `Photo ${g.to.photo} is before the end of the line leading to it.`
+        : `The search for the ${g.n_requested} plies before photo ${g.to.photo} ran out of time.`)).join(' ');
+  } else {
+    const after = d.plies - d.last_photo_ply;
+    line.textContent = `${d.gaps.length} gap${d.gaps.length === 1 ? '' : 's'} solved.`
+      + (after > 0 ? ` The last ${after} plies were played after the last photo and are not recorded.` : '');
   }
 }
 
-function renderVerify() {
-  const verified = !!state.data.labels.verified;
-  verifyToggle.setAttribute('aria-pressed', String(verified));
-  verifyToggle.textContent = verified ? 'Verified as correct' : 'Confirm this game is correct';
+/* ---------------- board and arrows ---------------- */
+
+function renderBoard() {
+  const tl = state.data.timeline;
+  const e = tl[state.i];
+  board.load(rowsFromFen(e.fen), 'bottom');
+  $('ply-label').textContent = e.ply === 0 ? 'start' : `${moveNo(e.ply)} ${moveName(e.uci || '', e.san)}`;
+  const parts = [`ply ${e.ply}`];
+  if (e.photo != null) parts.push(`photo ${e.photo}, confirmed`);
+  else if (e.kind === 'pinned') parts.push('accepted by you');
+  else if (e.kind === 'inferred') parts.push(`inferred, ${pct(e.p)} of likely lines`);
+  if (e.eval) parts.push(`eval ${fmtEval(e.eval)}`);
+  $('ply-state').textContent = parts.join(' · ');
+  $('nav-first').disabled = $('nav-prev').disabled = state.i === 0;
+  $('nav-last').disabled = $('nav-next').disabled = state.i === tl.length - 1;
+  renderNext();
 }
 
-function renderPgn() {
-  pgnText.textContent = state.data.pgn || '';
+/** The move out of the current position: its marginals live on the next entry. */
+function nextEntry() {
+  const tl = state.data.timeline;
+  const n = tl[state.i + 1];
+  return n && !n.break ? n : null;
 }
+
+function renderNext() {
+  const d = state.data;
+  const e = d.timeline[state.i];
+  const next = nextEntry();
+  const list = $('derived-list');
+  list.replaceChildren();
+  const arrows = [];
+  const note = $('next-note');
+  note.textContent = '';
+  if (!next) {
+    note.textContent = state.i === d.timeline.length - 1 ? '(after the last photo)' : '(gap not solved)';
+  } else {
+    const pin = d.pins.find((p) => p.ply === next.ply);
+    if (pin) note.textContent = `— ${moveName(pin.uci, pin.san)} accepted`;
+    for (const m of next.alts.slice(0, 5)) {
+      arrows.push({ uci: m.uci, kind: 'derived', p: m.p });
+      const li = el('li');
+      li.append(el('span', 'mv', moveName(m.uci, m.san)));
+      const bar = el('span', 'bar');
+      const fill = el('span');
+      fill.style.width = `${Math.round(m.p * 100)}%`;
+      bar.appendChild(fill);
+      li.append(bar);
+      const right = el('span', 'row');
+      right.style.gap = 'var(--space-2)';
+      right.append(el('span', 'pct', pct(m.p)));
+      if (pin && pin.uci === m.uci) {
+        const b = el('button', 'btn', 'Undo');
+        b.type = 'button';
+        b.addEventListener('click', () => unpin(next.ply));
+        right.append(b);
+      } else if (!pin) {
+        const b = el('button', 'btn', 'Accept');
+        b.type = 'button';
+        b.title = 'This move was played: keep it and work out the rest of the gap again';
+        b.addEventListener('click', () => pinMove(next.ply, m.uci));
+        right.append(b);
+      }
+      li.append(right);
+      list.appendChild(li);
+    }
+  }
+  renderEngine(e, arrows);
+}
+
+async function renderEngine(e, derivedArrows) {
+  const list = $('engine-list');
+  const key = e.fen;
+  const draw = (moves) => {
+    if (state.data.timeline[state.i].fen !== key) return;   // moved on meanwhile
+    list.replaceChildren();
+    for (const m of moves) {
+      const li = el('li');
+      li.append(el('span', 'mv', m.san), el('span', 'muted', ''), el('span', 'pct', fmtEval(m)));
+      list.appendChild(li);
+    }
+    if (!moves.length) list.appendChild(el('li', 'muted', 'No moves: the game is over here.'));
+    drawArrows($('board'), [...moves.map((m) => ({ uci: m.uci, kind: 'engine' })), ...derivedArrows]);
+  };
+  drawArrows($('board'), derivedArrows);
+  if (state.engine.has(key)) { draw(state.engine.get(key)); return; }
+  list.replaceChildren(el('li', 'muted', 'Stockfish is thinking…'));
+  try {
+    const res = await api(`/api/games/${gameId}/engine/${e.ply}`);
+    state.engine.set(key, res.moves);
+    draw(res.moves);
+  } catch {
+    if (state.data.timeline[state.i].fen === key) list.replaceChildren(el('li', 'muted', 'Stockfish is not available.'));
+  }
+}
+
+function go(i) {
+  const tl = state.data.timeline;
+  state.i = Math.max(0, Math.min(tl.length - 1, i));
+  renderBoard();
+  renderMoves();
+  renderGraph();
+}
+
+$('nav-first').addEventListener('click', () => go(0));
+$('nav-prev').addEventListener('click', () => go(state.i - 1));
+$('nav-next').addEventListener('click', () => go(state.i + 1));
+$('nav-last').addEventListener('click', () => go(Infinity));
+document.addEventListener('keydown', (ev) => {
+  if (!state.data || ev.target.closest('input, select, textarea')) return;
+  if (ev.key === 'ArrowLeft') { go(state.i - 1); ev.preventDefault(); }
+  if (ev.key === 'ArrowRight') { go(state.i + 1); ev.preventDefault(); }
+});
+
+/* ---------------- pins ---------------- */
+
+async function pinMove(ply, uci) {
+  if (state.busy) return;
+  state.busy = true;
+  try {
+    await api(`/api/games/${gameId}/pins`, { method: 'POST', body: { ply, uci } });
+    toast('Move accepted; working out the rest of the gap');
+    await solve();
+    await load({ quiet: true });
+  } catch (err) {
+    toast(`Not accepted: ${err.message}`);
+  } finally {
+    state.busy = false;
+  }
+}
+
+async function unpin(ply) {
+  if (state.busy) return;
+  state.busy = true;
+  try {
+    await api(`/api/games/${gameId}/pins/${ply}`, { method: 'DELETE' });
+    toast('Accepted move undone');
+    await solve();
+    await load({ quiet: true });
+  } catch (err) {
+    toast(`Not undone: ${err.message}`);
+  } finally {
+    state.busy = false;
+  }
+}
+
+/* ---------------- move list ---------------- */
+
+function renderMoves() {
+  const tl = state.data.timeline;
+  const body = $('move-rows');
+  body.replaceChildren();
+  let tr = null;
+  const btn = (i) => {
+    const e = tl[i];
+    const b = el('button', `ply ${e.certain ? 'certain' : ''} ${e.kind === 'pinned' ? 'pinned' : ''} ${i === state.i ? 'selected' : ''}`,
+      moveName(e.uci, e.san));
+    b.type = 'button';
+    if (e.photo != null) b.append(el('span', 'tag', `◆${e.photo}`));
+    b.addEventListener('click', () => go(i));
+    return b;
+  };
+  for (let i = 1; i < tl.length; i += 1) {
+    const e = tl[i];
+    if (e.break) {
+      const note = el('tr', 'gapnote');
+      const td = el('td', null, `Unsolved gap · photo ${e.photo} at ply ${e.ply}`);
+      td.colSpan = 3;
+      const jump = el('button', 'ply certain', '→');
+      jump.type = 'button';
+      jump.addEventListener('click', () => go(i));
+      td.append(' ', jump);
+      note.appendChild(td);
+      body.appendChild(note);
+      tr = null;
+      continue;
+    }
+    if (e.ply % 2 === 1 || !tr) {
+      tr = el('tr');
+      tr.append(el('td', 'movenum', `${Math.ceil(e.ply / 2)}.`), el('td'), el('td'));
+      body.appendChild(tr);
+      if (e.ply % 2 === 0) tr.children[1].textContent = '…';
+    }
+    tr.children[e.ply % 2 === 1 ? 1 : 2].appendChild(btn(i));
+  }
+  const sel = body.querySelector('.selected');
+  if (sel) sel.scrollIntoView({ block: 'nearest' });
+}
+
+/* ---------------- evaluation graph ---------------- */
+
+const SVGNS = 'http://www.w3.org/2000/svg';
+const svgEl = (tag, attrs) => {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  return e;
+};
+const pawns = (ev) => (ev.mate != null ? (ev.mate === 0 ? (ev.cp > 0 ? CLAMP : -CLAMP) : Math.sign(ev.mate) * CLAMP)
+  : Math.max(-CLAMP, Math.min(CLAMP, ev.cp / 100)));
+
+function renderGraph() {
+  const host = $('graph');
+  host.replaceChildren();
+  const tl = state.data.timeline.filter((e) => e.eval);
+  if (tl.length < 2) {
+    host.appendChild(el('p', 'muted', 'The graph appears once a gap is solved.'));
+    return;
+  }
+  const W = Math.max(320, host.clientWidth || 800);
+  const H = 220;
+  const m = { l: 34, r: 10, t: 10, b: 22 };
+  const maxPly = Math.max(1, tl[tl.length - 1].ply);
+  const x = (ply) => m.l + (ply / maxPly) * (W - m.l - m.r);
+  const y = (v) => m.t + ((CLAMP - v) / (2 * CLAMP)) * (H - m.t - m.b);
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img',
+    'aria-label': 'Evaluation by ply, pawns from White\'s side' });
+
+  for (const v of [-4, -2, 0, 2, 4]) {
+    svg.appendChild(svgEl('line', { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v),
+      stroke: v === 0 ? 'var(--line-strong)' : 'var(--line-1)', 'stroke-width': 1 }));
+    const t = svgEl('text', { x: m.l - 6, y: y(v) + 3, 'text-anchor': 'end', 'font-size': 10,
+      'font-family': 'var(--font-mono)', fill: 'var(--fg-3)' });
+    t.textContent = v > 0 ? `+${v}` : String(v);
+    svg.appendChild(t);
+  }
+  const step = maxPly > 60 ? 20 : 10;
+  for (let p = 0; p <= maxPly; p += step) {
+    const t = svgEl('text', { x: x(p), y: H - 6, 'text-anchor': 'middle', 'font-size': 10,
+      'font-family': 'var(--font-mono)', fill: 'var(--fg-3)' });
+    t.textContent = String(p);
+    svg.appendChild(t);
+  }
+
+  // segments: solid between two certain positions, dashed otherwise; none across an unsolved gap
+  for (let k = 1; k < tl.length; k += 1) {
+    const a = tl[k - 1];
+    const b = tl[k];
+    if (b.break || b.ply !== a.ply + 1) continue;
+    const solid = a.certain && b.certain;
+    svg.appendChild(svgEl('line', { x1: x(a.ply), y1: y(pawns(a.eval)), x2: x(b.ply), y2: y(pawns(b.eval)),
+      stroke: 'var(--fg-1)', 'stroke-width': 2, 'stroke-linecap': 'round',
+      'stroke-dasharray': solid ? 'none' : '3 4' }));
+  }
+  for (const e of tl) {
+    if (e.photo == null) continue;
+    svg.appendChild(svgEl('circle', { cx: x(e.ply), cy: y(pawns(e.eval)), r: 4.5,
+      fill: 'var(--fg-1)', stroke: 'var(--bg-raised)', 'stroke-width': 2 }));
+  }
+  const cur = state.data.timeline[state.i];
+  svg.appendChild(svgEl('line', { x1: x(cur.ply), x2: x(cur.ply), y1: m.t, y2: H - m.b,
+    stroke: 'var(--arrow-derived)', 'stroke-width': 1.5 }));
+
+  const hover = svgEl('line', { y1: m.t, y2: H - m.b, stroke: 'var(--line-strong)', 'stroke-width': 1,
+    visibility: 'hidden' });
+  svg.appendChild(hover);
+  const tip = el('div', 'tip');
+  tip.hidden = true;
+
+  const nearest = (clientX) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((clientX - r.left) / r.width) * W;
+    const ply = Math.round(((px - m.l) / (W - m.l - m.r)) * maxPly);
+    let best = 0;
+    for (let k = 1; k < tl.length; k += 1) if (Math.abs(tl[k].ply - ply) < Math.abs(tl[best].ply - ply)) best = k;
+    return tl[best];
+  };
+  svg.addEventListener('pointermove', (ev) => {
+    const e = nearest(ev.clientX);
+    hover.setAttribute('x1', x(e.ply));
+    hover.setAttribute('x2', x(e.ply));
+    hover.setAttribute('visibility', 'visible');
+    tip.hidden = false;
+    tip.textContent = `ply ${e.ply}${e.san ? ` · ${moveNo(e.ply)} ${e.san}` : ''} · ${fmtEval(e.eval)}`
+      + (e.photo != null ? ` · photo ${e.photo}` : e.certain ? '' : ' · inferred');
+    const r = svg.getBoundingClientRect();
+    const left = (x(e.ply) / W) * r.width;
+    tip.style.left = `${Math.min(r.width - tip.offsetWidth - 4, Math.max(0, left + 8))}px`;
+    tip.style.top = '4px';
+  });
+  svg.addEventListener('pointerleave', () => { hover.setAttribute('visibility', 'hidden'); tip.hidden = true; });
+  svg.addEventListener('click', (ev) => {
+    const e = nearest(ev.clientX);
+    go(state.data.timeline.indexOf(e));
+  });
+  host.append(svg, tip);
+}
+
+window.addEventListener('resize', () => { if (state.data) renderGraph(); });
+
+/* ---------------- actions ---------------- */
 
 async function setResult(value) {
-  if (state.busy) return;
-  setBusy(true);
   try {
     const resp = await api(`/api/games/${gameId}/result`, { method: 'POST', body: { result: value } });
     state.data.result = resp.result;
     state.data.pgn = resp.pgn;
     renderHeader();
-    renderResultChips();
-    renderPgn();
-    toast('Result updated.');
+    toast('Result updated');
   } catch (err) {
     toast(err.message);
-  } finally {
-    setBusy(false);
   }
 }
 
-copyPgnBtn.addEventListener('click', async () => {
+async function copy(text, what) {
   try {
-    await navigator.clipboard.writeText(state.data.pgn || '');
-    toast('PGN copied.');
+    await navigator.clipboard.writeText(text);
+    toast(`${what} copied`);
   } catch {
-    toast('Could not copy PGN.');
+    toast('The browser refused the clipboard');
   }
-});
+}
 
-lichessBtn.addEventListener('click', async () => {
-  lichessBtn.disabled = true;
+$('copy-pgn-btn').addEventListener('click', () => copy(state.data.pgn || '', 'PGN'));
+$('copy-fens-btn').addEventListener('click', () => copy(
+  state.data.fens.map((f) => `photo ${f.photo}, ply ${f.ply}: ${f.fen}`).join('\n'), 'FENs'));
+
+$('lichess-btn').addEventListener('click', async () => {
+  const b = $('lichess-btn');
+  b.disabled = true;
   try {
-    const resp = await api(`/api/games/${gameId}/lichess`, { method: 'POST' });
-    if (resp.url) {
-      state.data.lichess_url = resp.url;
+    const { url } = await api(`/api/games/${gameId}/lichess`, { method: 'POST' });
+    if (url) {
+      state.data.lichess_url = url;
       renderHeader();
-      window.open(resp.url, '_blank', 'noopener');
+      window.open(url, '_blank', 'noopener');
     } else {
-      toast('lichess declined the import.');
+      toast('lichess did not accept the import; try again later');
     }
   } catch (err) {
     toast(err.message);
   } finally {
-    lichessBtn.disabled = false;
+    b.disabled = false;
   }
 });
 
-deleteBtn.addEventListener('click', async () => {
+$('delete-btn').addEventListener('click', async () => {
   const ok = await modal({
     title: 'Delete this game?',
-    body: 'The game directory, frames and event log will be removed. This cannot be undone.',
+    body: 'The photos, positions, clock log and inferred moves will be removed. This cannot be undone.',
     row: true,
-    choices: [
-      { label: 'Cancel', value: false },
-      { label: 'Delete', value: true, cls: 'btn-danger' },
-    ],
+    choices: [{ label: 'Cancel', value: false }, { label: 'Delete', value: true, cls: 'btn-danger' }],
   });
   if (!ok) return;
   try {
     await api(`/api/games/${gameId}`, { method: 'DELETE' });
     location.href = '/games';
   } catch (err) {
-    toast(`Could not delete: ${err.message}`);
-  }
-});
-
-verifyToggle.addEventListener('click', async () => {
-  if (state.busy) return;
-  const next = !state.data.labels.verified;
-  setBusy(true);
-  try {
-    const resp = await api(`/api/games/${gameId}/verify`, { method: 'POST', body: { verified: next } });
-    state.data.labels.verified = resp.verified;
-    renderVerify();
-    toast(resp.verified ? 'Marked as training truth.' : 'Verification cleared.');
-  } catch (err) {
     toast(err.message);
-  } finally {
-    setBusy(false);
   }
 });
 
-/* ---------------- move list ---------------- */
+// photos.js fires this after a board is confirmed or the settings change
+window.addEventListener('boardcam:changed', () => load({ quiet: true }));
 
-function isPinned(index) {
-  return state.data.labels.corrections.some((c) => c.ply === index);
-}
-
-function badgeFor(ply) {
-  if (isPinned(ply.index)) return { cls: 'badge-pinned', label: 'pinned' };
-  if (ply.flags.includes('unexplained')) return { cls: 'badge-error', label: 'unexplained' };
-  if (ply.flags.includes('promotion_unknown')) return { cls: 'badge-warn', label: 'promotion?' };
-  if (ply.flags.includes('low_margin')) {
-    const label = ply.margin === null ? '∞' : ply.margin.toFixed(1);
-    return { cls: 'badge-warn', label };
-  }
-  return null;
-}
-
-function plySpan(ply) {
-  const span = document.createElement('span');
-  span.className = 'ply';
-  span.dataset.index = String(ply.index);
-  span.tabIndex = 0;
-  span.textContent = ply.san;
-  const badge = badgeFor(ply);
-  if (badge) {
-    const b = document.createElement('span');
-    b.className = `badge ${badge.cls}`;
-    b.textContent = badge.label;
-    span.appendChild(b);
-  }
-  span.addEventListener('click', () => selectPly(ply.index));
-  return span;
-}
-
-function renderMoveList() {
-  moveRows.replaceChildren();
-  const plies = state.data.analysis.plies;
-  for (let i = 0; i < plies.length; i += 2) {
-    const tr = document.createElement('tr');
-    const num = document.createElement('td');
-    num.className = 'movenum num';
-    num.textContent = `${Math.floor(i / 2) + 1}.`;
-    tr.appendChild(num);
-
-    const whiteTd = document.createElement('td');
-    whiteTd.appendChild(plySpan(plies[i]));
-    tr.appendChild(whiteTd);
-
-    const blackTd = document.createElement('td');
-    if (plies[i + 1]) blackTd.appendChild(plySpan(plies[i + 1]));
-    tr.appendChild(blackTd);
-
-    moveRows.appendChild(tr);
-  }
-  highlightSelection();
-}
-
-function highlightSelection() {
-  for (const el of moveRows.querySelectorAll('.ply')) {
-    el.classList.toggle('selected', Number(el.dataset.index) === state.selected);
-  }
-}
-
-function flashChanged(indices) {
-  for (const idx of indices || []) {
-    const el = moveRows.querySelector(`.ply[data-index="${idx}"]`);
-    if (!el) continue;
-    el.classList.remove('flash');
-    void el.offsetWidth;
-    el.classList.add('flash');
-  }
-}
-
-/* ---------------- detail pane ---------------- */
-
-function beforeSeqFor(index) {
-  const plies = state.data.analysis.plies;
-  return index === 0 ? 0 : plies[index - 1].seq;
-}
-
-function setImage(img, url) {
-  img.hidden = false;
-  img.onerror = () => {
-    img.hidden = true;
-    let fallback = img.nextElementSibling;
-    if (!fallback || !fallback.classList.contains('img-fallback')) {
-      fallback = document.createElement('p');
-      fallback.className = 'img-fallback';
-      fallback.textContent = 'unavailable';
-      img.after(fallback);
-    }
-  };
-  const existingFallback = img.nextElementSibling;
-  if (existingFallback && existingFallback.classList.contains('img-fallback')) existingFallback.remove();
-  img.src = url;
-}
-
-function rectUrl(seq, prevSeq, squares) {
-  const params = new URLSearchParams({ k: '0', prev: String(prevSeq), squares });
-  return `/api/games/${gameId}/rect/${seq}?${params}`;
-}
-
-function frameRecordFor(seq) {
-  return (state.data.analysis.frames || []).find((f) => f.seq === seq) || null;
-}
-
-function renderFrameKv(frame) {
-  frameKv.replaceChildren();
-  if (!frame) {
-    const kv = document.createElement('span');
-    kv.className = 'kv';
-    kv.textContent = 'no frame record';
-    frameKv.appendChild(kv);
-    return;
-  }
-  for (const [key, value] of Object.entries(frame)) {
-    const kv = document.createElement('span');
-    kv.className = 'kv';
-    let text = value;
-    if (typeof value === 'number') text = Number.isInteger(value) ? value : value.toFixed(3);
-    else if (Array.isArray(value)) text = value.length ? value.join(',') : '—';
-    else if (value === null || value === undefined) text = '—';
-    kv.textContent = `${key}: ${text}`;
-    frameKv.appendChild(kv);
-  }
-}
-
-function renderCandidates(ply) {
-  candidatesList.replaceChildren();
-  const cands = ply.candidates || [];
-  if (!cands.length) {
-    const li = document.createElement('li');
-    li.className = 'muted';
-    li.textContent = 'No alternatives were scored at this frame.';
-    candidatesList.appendChild(li);
-    return;
-  }
-  const top = cands[0];
-  for (const c of cands) {
-    const li = document.createElement('li');
-    li.className = 'candidate-row' + (c === top ? ' top' : '');
-
-    const san = document.createElement('span');
-    san.textContent = c.san;
-    li.appendChild(san);
-
-    const score = document.createElement('span');
-    score.textContent = `${c.score.toFixed(1)} nats`;
-    li.appendChild(score);
-
-    const delta = document.createElement('span');
-    delta.className = 'delta';
-    const below = top.score - c.score;
-    delta.textContent = below > 0 ? `-${below.toFixed(1)} vs top` : 'top';
-    li.appendChild(delta);
-
-    li.addEventListener('click', () => { sanInput.value = c.san; sanInput.focus(); });
-    candidatesList.appendChild(li);
-  }
-}
-
-function selectPly(index) {
-  state.selected = index;
-  highlightSelection();
-  renderDetail();
-  const el = moveRows.querySelector(`.ply[data-index="${index}"]`);
-  if (el) el.scrollIntoView({ block: 'nearest' });
-}
-
-function renderDetail() {
-  const plies = state.data.analysis.plies;
-  if (state.selected === null || !plies[state.selected]) {
-    detailEmpty.hidden = false;
-    detailBody.hidden = true;
-    return;
-  }
-  detailEmpty.hidden = true;
-  detailBody.hidden = false;
-
-  const ply = plies[state.selected];
-  const moveNo = Math.floor(ply.index / 2) + 1;
-  const dots = ply.index % 2 === 0 ? '.' : '...';
-  detailTitle.textContent = `${moveNo}${dots} ${ply.san}`;
-
-  detailFlags.replaceChildren();
-  const badge = badgeFor(ply);
-  if (badge) {
-    const b = document.createElement('span');
-    b.className = `badge ${badge.cls}`;
-    b.textContent = badge.label;
-    detailFlags.appendChild(b);
-  }
-  const marginText = document.createElement('span');
-  marginText.className = 'muted';
-  marginText.style.fontSize = 'var(--text-sm)';
-  marginText.textContent = `margin: ${ply.margin === null ? '∞' : ply.margin.toFixed(1) + ' nats'}`;
-  detailFlags.appendChild(marginText);
-
-  const beforeSeq = beforeSeqFor(ply.index);
-  const afterSeq = ply.seq;
-  const squares = ply.uci ? `${ply.uci.slice(0, 2)},${ply.uci.slice(2, 4)}` : '';
-
-  setImage(imgRawBefore, `/games/${gameId}/frames/${beforeSeq}/0`);
-  setImage(imgRawAfter, `/games/${gameId}/frames/${afterSeq}/0`);
-  setImage(imgRectBefore, rectUrl(beforeSeq, afterSeq, squares));
-  setImage(imgRectAfter, rectUrl(afterSeq, beforeSeq, squares));
-
-  renderCandidates(ply);
-  renderFrameKv(frameRecordFor(afterSeq));
-
-  unpinBtn.hidden = !isPinned(ply.index);
-  sanInput.value = '';
-}
-
-/* ---------------- corrections ---------------- */
-
-correctBtn.addEventListener('click', async () => {
-  if (state.busy || state.selected === null) return;
-  const san = sanInput.value.trim();
-  if (!san) { toast('Enter a SAN move first.'); return; }
-  setBusy(true);
-  try {
-    const resp = await api(`/api/games/${gameId}/corrections`, {
-      method: 'POST',
-      body: { ply: state.selected, san },
-    });
-    applyReviewResponse(resp, { keepSelection: true, flash: resp.changed });
-    toast('Correction applied.');
-  } catch (err) {
-    // 400 = illegal move; leave the input as-is either way so it can be edited.
-    toast(err.message);
-  } finally {
-    setBusy(false);
-  }
-});
-
-unpinBtn.addEventListener('click', async () => {
-  if (state.busy || state.selected === null) return;
-  setBusy(true);
-  try {
-    const resp = await api(`/api/games/${gameId}/corrections/${state.selected}`, { method: 'DELETE' });
-    applyReviewResponse(resp, { keepSelection: true, flash: resp.changed });
-    toast('Unpinned.');
-  } catch (err) {
-    toast(err.message);
-  } finally {
-    setBusy(false);
-  }
-});
-
-/* ---------------- keyboard nav ---------------- */
-
-document.addEventListener('keydown', (e) => {
-  if (state.busy || !state.data || !state.data.analysis) return;
-  const active = document.activeElement;
-  if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
-
-  const plies = state.data.analysis.plies;
-  if (!plies.length) return;
-
-  let next = null;
-  if (e.key === 'ArrowDown' || e.key === 'j') next = (state.selected === null ? 0 : state.selected + 1);
-  else if (e.key === 'ArrowUp' || e.key === 'k') next = (state.selected === null ? 0 : state.selected - 1);
-  if (next === null) return;
-
-  next = Math.max(0, Math.min(plies.length - 1, next));
-  e.preventDefault();
-  selectPly(next);
-});
-
-/* ---------------- load / re-render ---------------- */
-
-function applyReviewResponse(data, { keepSelection = false, flash = [] } = {}) {
-  const prevSelected = state.selected;
-  state.data = data;
+function renderAll() {
   renderHeader();
-  renderResultChips();
-  renderVerify();
-  renderPgn();
-  renderMoveList();
-
-  const plies = data.analysis.plies;
-  if (keepSelection && prevSelected !== null && plies[prevSelected]) {
-    selectPly(prevSelected);
-  } else if (plies.length) {
-    selectPly(0);
-  } else {
-    state.selected = null;
-    renderDetail();
-  }
-  flashChanged(flash);
+  renderBoard();
+  renderMoves();
+  renderGraph();
 }
 
-async function load() {
-  if (!gameId) {
-    statusMsg.replaceChildren();
-    statusMsg.append('No game specified. ');
-    const a = document.createElement('a');
-    a.href = '/games';
-    a.textContent = 'Back to games';
-    statusMsg.appendChild(a);
-    statusMsg.append('.');
-    return;
-  }
-
-  let data;
-  try {
-    data = await api(`/api/games/${gameId}/review`);
-  } catch (err) {
-    fail(`Could not load this game: ${err.message}`);
-    return;
-  }
-
-  if (data.pending) {
-    // Moves between photos come from the line solver (photo-positions spec,
-    // Phase 3); until then the photos section above is the whole review.
-    statusMsg.textContent = 'The moves between photos are not inferred yet.';
-    content.hidden = true;
-    return;
-  }
-
-  statusMsg.textContent = '';
-  content.hidden = false;
-  applyReviewResponse(data, { keepSelection: false });
+if (!gameId) {
+  $('status-msg').textContent = 'No game given.';
+} else {
+  load();
 }
-
-load();
