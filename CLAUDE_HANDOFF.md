@@ -1,6 +1,6 @@
 # Claude Code Handoff — BoardCam
 
-> Last updated: 2026-11-18
+> Last updated: 2026-11-23
 > Repo: https://github.com/Kaczor594/boardcam.git (public)
 > Branch: main
 
@@ -19,9 +19,14 @@ and measured accuracy). The September stand-camera spec is abandoned.
 
 ## Current State
 
-Phases 1–4 of the spec are built; **Phase 4's manual gate is open**: one real
-game with at least three photos, played and reviewed on the phone, PGN
-imported into lichess without edits. Nothing has been played on this build.
+Phases 1–4 of the spec are built and gated. First field test 2026-11-21:
+three real games (`data/games/20261121-*`), lichess import fine, photo gaps
+6–16 plies plus one of 25. The only failure was a read error (bishop read as
+rook on e3 in `20261121-115510-45fc` photos 4–5, confirmed unchanged), which
+made one gap unreachable; correcting it in a scratch copy solved every gap.
+The three phone issues it found (hint too subtle, review page jumping on
+accept, clock needing White at the bottom) were fixed 2026-11-23 and are not
+yet tested on the phone. Details in the spec's Notes.
 
 - Reader: Fable 5.2 99.6 % per square on the 21-photo hold-out (Phase 1).
 - Intake and confirmation tested on the iPhone for the clock half (Phase 2);
@@ -79,8 +84,10 @@ DB plus untracked `data/players.json`.
 
 ## Next Steps
 
-- [ ] Phase 4 manual gate: one real game, ≥ 3 photos, reviewed on the phone;
-      lichess import without edits. Note: was the glow noticed, did it
-      distract; how far apart were the photos (gap-24 cases); any UI issues.
-      Record in the spec's Notes, then `/spec build` resumes at Phase 5.
-- [ ] Then `scripts.replay_game data/games/<that game>` is the gate command.
+- [ ] Isaac: correct `20261121-115510-45fc` photo 4 (e3 black bishop) and
+      photo 5 (e3 black bishop, a2 white pawn) on the review page.
+- [ ] Next game: check the full-screen hint frame, either-way-round clock,
+      and that Accept no longer jumps the review page.
+- [ ] `/spec build` resumes at Phase 5 (labelled data and a grid finder).
+      Consider a material-count check that flags impossible reads before
+      confirmation (field test: a misread was confirmed without looking).

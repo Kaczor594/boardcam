@@ -75,7 +75,7 @@
       background: var(--negative) !important;
       color: #fff !important;
     }
-    #zone-black { transform: rotate(180deg); }
+    #zone-top { transform: rotate(180deg); }
 
     .zone-time {
       font-family: var(--font-mono);
@@ -129,15 +129,20 @@
     }
     #control-bar #camera-btn:hover:not(:disabled) { background: var(--paper-20); }
     #control-bar #camera-btn svg { width: 18px; height: 18px; }
-    /* Photo hint: a slow, low-contrast glow once the moves since the last photo
-       are getting hard to reconstruct. No text, no sound, no vibration. */
-    #control-bar #camera-btn.hint { animation: photo-hint 3.2s ease-in-out infinite; }
+    /* Photo hint: a slow terracotta frame around the whole screen once the
+       moves since the last photo are getting hard to reconstruct. Visible on
+       the dark and the light zone; no text, no sound, no vibration. */
+    #app::after {
+      content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50;
+      box-shadow: inset 0 0 0 0 rgba(210, 153, 114, 0);
+    }
+    #app.hint::after { animation: photo-hint 2.8s ease-in-out infinite; }
     @keyframes photo-hint {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(253, 252, 248, 0); }
-      50%      { box-shadow: 0 0 0 5px rgba(253, 252, 248, 0.28), 0 0 14px 2px rgba(253, 252, 248, 0.22); }
+      0%, 100% { box-shadow: inset 0 0 0 3px rgba(210, 153, 114, 0.35), inset 0 0 18px 4px rgba(210, 153, 114, 0.15); }
+      50%      { box-shadow: inset 0 0 0 7px rgba(210, 153, 114, 0.9),  inset 0 0 40px 12px rgba(210, 153, 114, 0.45); }
     }
     @media (prefers-reduced-motion: reduce) {
-      #control-bar #camera-btn.hint { animation: none; box-shadow: 0 0 0 4px rgba(253, 252, 248, 0.3); }
+      #app.hint::after { animation: none; box-shadow: inset 0 0 0 6px rgba(210, 153, 114, 0.8); }
     }
 
     /* ---------- finished banner ---------- */
@@ -248,10 +253,10 @@
     </div>
 
     <div id="clock-area">
-      <div class="zone" id="zone-black">
+      <div class="zone" id="zone-top">
         <div class="zone-inner">
-          <div class="zone-time num" id="time-black">10:00</div>
-          <div class="zone-flag-label" id="flag-black" hidden>Flag</div>
+          <div class="zone-time num" id="time-top">10:00</div>
+          <div class="zone-flag-label" id="flag-top" hidden>Flag</div>
         </div>
       </div>
 
@@ -265,10 +270,10 @@
         <button type="button" class="btn" id="new-btn">New</button>
       </div>
 
-      <div class="zone" id="zone-white">
+      <div class="zone" id="zone-bottom">
         <div class="zone-inner">
-          <div class="zone-time num" id="time-white">10:00</div>
-          <div class="zone-flag-label" id="flag-white" hidden>Flag</div>
+          <div class="zone-time num" id="time-bottom">10:00</div>
+          <div class="zone-flag-label" id="flag-bottom" hidden>Flag</div>
         </div>
       </div>
     </div>

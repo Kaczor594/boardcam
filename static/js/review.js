@@ -310,7 +310,15 @@ function renderMoves() {
     tr.children[e.ply % 2 === 1 ? 1 : 2].appendChild(btn(i));
   }
   const sel = body.querySelector('.selected');
-  if (sel) sel.scrollIntoView({ block: 'nearest' });
+  // Keep the selected move visible inside the list's own scroll box only;
+  // scrollIntoView would also scroll the page, which on a phone jumps away
+  // from the board on every step or accept.
+  const box = body.closest('.movelist-scroll');
+  if (sel && box) {
+    const s = sel.getBoundingClientRect(), b = box.getBoundingClientRect();
+    if (s.top < b.top) box.scrollTop -= b.top - s.top;
+    else if (s.bottom > b.bottom) box.scrollTop += s.bottom - b.bottom;
+  }
 }
 
 /* ---------------- evaluation graph ---------------- */

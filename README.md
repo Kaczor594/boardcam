@@ -18,8 +18,8 @@ ends as a PGN with clock times without anyone writing moves down.
 - **Review.** The review page steps through the game, shows the likely moves
   and Stockfish's as arrows, lets the player accept the move that was played
   (which re-solves the gap), draws an evaluation graph, and exports a PGN that
-  marks every inferred move. The clock's camera button glows faintly when the
-  moves since the last photo are becoming too many to reconstruct.
+  marks every inferred move. A slow frame pulses around the clock screen when
+  the moves since the last photo are becoming too many to reconstruct.
 
 ## Status
 

@@ -289,13 +289,20 @@ review page.
 - The page repaints from one rAF loop; a backgrounded tab freezes until it is
   foregrounded (harmless: the clock phone is in front all game).
 
-**Photo hint.** The camera button glows (a slow 3.2 s pulse of a pale ring on
-the dark control bar; a static ring under reduced motion) when
+**Photo hint.** A terracotta frame pulses around the whole clock screen (a
+slow 2.8 s inset glow over both halves; a static frame under reduced motion;
+changed from a ring on the camera button after the 2026-11-21 field test,
+where the ring went unnoticed) when
 `ClockSM`'s `photoHint()` says so: at least one photo taken in this game, the
 clock running or paused, both clocks at one minute or more, and
 `ply − (highest ply of any non-replaced photo) ≥ hello.hint_plies`. The next
 photo clears it. No sound, no text, no vibration. The default 1350/1350 game
-glows after 11 plies.
+shows it after 11 plies.
+
+**Clock sides.** The two halves of the clock screen have no fixed colour: the
+first press of the game is White's on whichever half it lands, and that
+assignment is saved with the clock state, so the phone can lie either way
+round.
 
 ---
 

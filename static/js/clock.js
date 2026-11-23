@@ -54,12 +54,11 @@ const el = {
   photoDot: $('photo-dot'),
   photosLabel: $('photos-label'),
 
-  zoneBlack: $('zone-black'),
-  zoneWhite: $('zone-white'),
-  timeBlack: $('time-black'),
-  timeWhite: $('time-white'),
-  flagBlack: $('flag-black'),
-  flagWhite: $('flag-white'),
+  // Physical halves of the screen; which colour each one is gets decided by
+  // the first press (whiteAt), so the phone can lie either way round.
+  zone: { top: $('zone-top'), bottom: $('zone-bottom') },
+  time: { top: $('time-top'), bottom: $('time-bottom') },
+  flag: { top: $('flag-top'), bottom: $('flag-bottom') },
 
   pauseResumeBtn: $('pause-resume-btn'),
   cameraBtn: $('camera-btn'),
@@ -99,6 +98,7 @@ let sm = new ClockSM({ initialMs: selectedPreset.initialMs, incrementMs: selecte
 let seqBase = 0;              // floor from the server if local state was lost
 let flagSent = false;
 let finishedNotice = false;
+let whiteAt = 'bottom';       // the half of the screen White presses; set by the first press
 let hintPlies = null;         // hello.hint_plies: glow the camera button past this many plies
 let photos = [];              // positions.json "photos", newest last
 let sheet = null;             // {n, file?, objectUrl?, editor, ply, retakeOf, stamp}
@@ -127,6 +127,7 @@ function save() {
     snap: sm.snapshot(performance.now(), Date.now()),
     seqBase,
     flagSent,
+    whiteAt,
   });
 }
 
@@ -296,6 +297,7 @@ function startGame(g, clock, saved = null) {
   sm = clock;
   seqBase = saved ? saved.seqBase || 0 : 0;
   flagSent = saved ? Boolean(saved.flagSent) : false;
+  whiteAt = saved && saved.whiteAt === 'top' ? 'top' : 'bottom';
   finishedNotice = false;
   el.finishedBanner.hidden = true;
   photos = [];
@@ -406,8 +408,18 @@ function attemptPress(side) {
   save();
 }
 
-el.zoneWhite.addEventListener('pointerdown', (e) => { e.preventDefault(); attemptPress('white'); });
-el.zoneBlack.addEventListener('pointerdown', (e) => { e.preventDefault(); attemptPress('black'); });
+/** Half of the screen a side presses, and the side that presses a half. */
+const halfOf = (side) => (side === 'white') === (whiteAt === 'bottom') ? 'bottom' : 'top';
+const sideAt = (half) => (half === whiteAt ? 'white' : 'black');
+
+/** The first press of the game is White's, on whichever half it lands. */
+function pressHalf(half) {
+  if (sm.state === 'ready') whiteAt = half;
+  attemptPress(sideAt(half));
+}
+
+el.zone.top.addEventListener('pointerdown', (e) => { e.preventDefault(); pressHalf('top'); });
+el.zone.bottom.addEventListener('pointerdown', (e) => { e.preventDefault(); pressHalf('bottom'); });
 
 function pauseClock() {
   if (sm.pause(performance.now())) {
@@ -861,23 +873,17 @@ function refreshSheetButtons() {
 /* ---------------- render loop ---------------- */
 
 function render(now) {
-  el.timeWhite.textContent = formatClock(sm.remaining('white', now));
-  el.timeBlack.textContent = formatClock(sm.remaining('black', now));
-
   const running = sm.state === 'running';
-  const whiteActive = running && sm.turn === 'white';
-  const blackActive = running && sm.turn === 'black';
-  el.zoneWhite.classList.toggle('active', whiteActive);
-  el.zoneWhite.classList.toggle('idle', running && !whiteActive);
-  el.zoneBlack.classList.toggle('active', blackActive);
-  el.zoneBlack.classList.toggle('idle', running && !blackActive);
-
-  const flaggedWhite = sm.state === 'flagged' && sm.flaggedSide === 'white';
-  const flaggedBlack = sm.state === 'flagged' && sm.flaggedSide === 'black';
-  el.zoneWhite.classList.toggle('flagged', flaggedWhite);
-  el.zoneBlack.classList.toggle('flagged', flaggedBlack);
-  el.flagWhite.hidden = !flaggedWhite;
-  el.flagBlack.hidden = !flaggedBlack;
+  for (const side of ['white', 'black']) {
+    const half = halfOf(side);
+    const active = running && sm.turn === side;
+    const flagged = sm.state === 'flagged' && sm.flaggedSide === side;
+    el.time[half].textContent = formatClock(sm.remaining(side, now));
+    el.zone[half].classList.toggle('active', active);
+    el.zone[half].classList.toggle('idle', running && !active);
+    el.zone[half].classList.toggle('flagged', flagged);
+    el.flag[half].hidden = !flagged;
+  }
 
   if (sm.state === 'flagged' && !flagSent) {
     flagSent = true;
@@ -896,7 +902,7 @@ function render(now) {
 
   el.plyLabel.textContent = `ply ${wireSeq(sm.seq)}`;
   const shots = live().map((p) => p.ply);
-  el.cameraBtn.classList.toggle('hint', photoHint({
+  el.app.classList.toggle('hint', photoHint({
     state: sm.state,
     ply: wireSeq(sm.seq),
     lastPhotoPly: shots.length ? Math.max(...shots) : null,

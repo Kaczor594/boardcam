@@ -89,10 +89,10 @@ It prints the URL. Then, on the phone:
    (`/games` → the game).
 
 Three or four photos a game is the intended rate: one in the opening, one or
-two in the middlegame, and the final position. When the **Photo** button
-starts to glow faintly, the moves since the last photo are becoming too many
+two in the middlegame, and the final position. When a terracotta frame
+starts pulsing around the clock screen, the moves since the last photo are becoming too many
 to reconstruct reliably (11 plies at the default 1350 ratings); a photo then
-clears it. It never glows before the first photo or while either clock is
+clears it. It never shows before the first photo or while either clock is
 under a minute.
 
 ## 4a. After the game: review
