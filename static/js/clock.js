@@ -3,7 +3,7 @@
 // network helpers in ws.js. Protocol: docs/PROTOCOL.md.
 
 import { ClockSM, photoHint } from './clocksm.js';
-import { BoardEditor } from './board.js';
+import { BoardEditor, homeSelect } from './board.js';
 import {
   api,
   GameSocket,
@@ -76,6 +76,7 @@ const el = {
   sheetEdit: $('sheet-edit'),
   sheetFlags: $('sheet-flags'),
   sheetBoard: $('sheet-board'),
+  sheetHome: $('sheet-home'),
   sheetPly: $('sheet-ply'),
   plyMinus: $('ply-minus'),
   plyPlus: $('ply-plus'),
@@ -745,6 +746,7 @@ function showSheetFor(p) {
     sheet.editor = new BoardEditor(el.sheetBoard, {
       rows: base.rows, home: base.home, editable: true, onChange: () => showFlags(null),
     });
+    el.sheetHome.replaceChildren(homeSelect(sheet.editor));
     sheet.editorFor = `${p.n}:${p.status}`;
     sheet.ply = p.status === 'confirmed' ? p.confirmed.ply : p.ply;
     sheet.clockPly = p.ply;
@@ -775,7 +777,7 @@ function showFlags(flags) {
   }
   el.sheetFlags.hidden = false;
   el.sheetFlags.textContent = `This position is impossible: ${flags.map((f) => FLAG_TEXT[f] || f).join('; ')}. `
-    + 'Fix the squares, rotate the board, change the ply, or retake the photo.';
+    + "Fix the squares, White's side, the ply, or retake the photo.";
 }
 
 function showPly() {
@@ -794,7 +796,7 @@ function showPly() {
 
 el.plyMinus.addEventListener('click', () => { sheet.ply -= 1; showPly(); showFlags(null); });
 el.plyPlus.addEventListener('click', () => { sheet.ply += 1; showPly(); showFlags(null); });
-el.sheetRotate.addEventListener('click', () => sheet.editor && sheet.editor.rotate());
+el.sheetRotate.addEventListener('click', () => sheet.editor && sheet.editor.flip());
 el.sheetUndo.addEventListener('click', () => sheet.editor && sheet.editor.reset());
 
 el.sheetConfirm.addEventListener('click', async () => {

@@ -80,8 +80,9 @@ It prints the URL. Then, on the phone:
 4. The photo uploads and the board comes back as a diagram, usually in under a
    minute (a photo taken across a corner can take three). You do not have to
    wait: **Resume play** is always one tap, and the board waits for you.
-5. To fix a read, tap a square and choose the piece; **Rotate** if White's side
-   is wrong; **−/+** if the photo was taken after a move but before its press.
+5. To fix a read, tap a square and choose the piece. **Flip view** only turns
+   the diagram over; if the reader put White on the wrong side, change
+   **White's side in the photo** (rarely needed); **−/+** if the photo was taken after a move but before its press.
    **Confirm board** stores it. An impossible position (two white kings, a pawn
    on the back rank, …) is refused with the reason; fix it or **Retake**.
 6. At the end, **Stop** and record the result, then take a photo of the final

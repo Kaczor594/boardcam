@@ -3,11 +3,16 @@
 // The reader reports a board in the *photo frame* (row 0 farthest from the
 // camera, column 0 leftmost) plus the side of the photo White's home rank is
 // on. The editor keeps exactly that pair — rows + home — because it is the
-// training label Phase 5 wants, and draws it as a diagram with White at the
-// bottom. "Rotate" changes only the home side; tapping a square changes only
-// the photo-frame cell under it. Mirrors engine/position.py:square_of.
+// training label Phase 5 wants, and draws it as a diagram. "Flip view" only
+// turns the diagram (White or Black at the bottom) and never changes the
+// position; the home side changes only through the explicit "White's side in
+// the photo" choice (homeSelect). Tapping a square changes only the
+// photo-frame cell under it. Mirrors engine/position.py:square_of.
 
-export const HOME_SIDES = ['bottom', 'right', 'top', 'left'];   // rotate cycles in this order
+export const HOME_SIDES = ['bottom', 'right', 'top', 'left'];
+const HOME_LABELS = {
+  bottom: 'near the camera', top: 'far from the camera', left: 'on the left', right: 'on the right',
+};
 
 /** Board square {file 0..7, rank 0..7} of photo cell (r, c) for a White home side. */
 export function squareOf(r, c, home) {
@@ -52,7 +57,7 @@ export function glyph(ch) {
  * A board diagram, optionally editable.
  *
  *   const ed = new BoardEditor(container, { rows, home, editable: true, onChange });
- *   ed.rotate(); ed.rows; ed.home; ed.changed  // cells that differ from the read
+ *   ed.flip(); ed.setHome('top'); ed.rows; ed.home; ed.changed  // cells that differ from the read
  */
 export class BoardEditor {
   constructor(container, { rows, home, editable = false, onChange = null } = {}) {
@@ -60,6 +65,7 @@ export class BoardEditor {
     this.editable = editable;
     this.onChange = onChange;
     this.selected = null;          // {file, rank}
+    this.flipped = false;          // view only: Black at the bottom
     this.load(rows, home);
   }
 
@@ -83,8 +89,16 @@ export class BoardEditor {
     return out;
   }
 
-  rotate() {
-    this.home = HOME_SIDES[(HOME_SIDES.indexOf(this.home) + 1) % 4];
+  /** Turn the diagram over. View only: the position does not change. */
+  flip() {
+    this.flipped = !this.flipped;
+    this.render();
+  }
+
+  /** Change which side of the photo White's home rank is on (changes the position). */
+  setHome(home) {
+    if (!HOME_SIDES.includes(home) || home === this.home) return;
+    this.home = home;
     this.selected = null;
     this.render();
     if (this.onChange) this.onChange(this);
@@ -116,14 +130,16 @@ export class BoardEditor {
     const grid = document.createElement('div');
     grid.className = 'bd-grid';
     grid.setAttribute('role', 'grid');
-    grid.setAttribute('aria-label', 'Board, White at the bottom');
+    grid.setAttribute('aria-label', `Board, ${this.flipped ? 'Black' : 'White'} at the bottom`);
+    const ranks = this.flipped ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0];
+    const files = this.flipped ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7];
     const changed = new Set(this.changed.map(({ r, c }) => {
       const sq = squareOf(r, c, this.home);
       return `${sq.file}${sq.rank}`;
     }));
 
-    for (let rank = 7; rank >= 0; rank -= 1) {
-      for (let file = 0; file < 8; file += 1) {
+    for (const rank of ranks) {
+      for (const file of files) {
         const ch = this.pieceAt(file, rank);
         const cell = document.createElement(this.editable ? 'button' : 'div');
         if (this.editable) cell.type = 'button';
@@ -135,8 +151,8 @@ export class BoardEditor {
         }
         cell.textContent = glyph(ch);
         cell.setAttribute('aria-label', `${FILES[file]}${rank + 1} ${PIECE_NAMES[ch]}`);
-        if (file === 0) cell.dataset.rank = String(rank + 1);
-        if (rank === 0) cell.dataset.file = FILES[file];
+        if (file === files[0]) cell.dataset.rank = String(rank + 1);
+        if (rank === ranks[7]) cell.dataset.file = FILES[file];
         if (this.editable) {
           cell.addEventListener('click', () => {
             const same = this.selected && this.selected.file === file && this.selected.rank === rank;
@@ -176,6 +192,30 @@ export class BoardEditor {
   }
 }
 
+/**
+ * The explicit control for a wrongly read orientation: a labelled select of
+ * the side of the photo White's pieces started on. Kept in step with the
+ * editor (Undo fixes resets it). Returns the <label> to place in the page.
+ */
+export function homeSelect(editor) {
+  const label = document.createElement('label');
+  label.className = 'bd-home';
+  label.append("White's side in the photo ");
+  const sel = document.createElement('select');
+  for (const h of HOME_SIDES) {
+    const o = document.createElement('option');
+    o.value = h;
+    o.textContent = HOME_LABELS[h] + (h === editor.originalHome ? ' (as read)' : '');
+    sel.appendChild(o);
+  }
+  sel.value = editor.home;
+  sel.addEventListener('change', () => editor.setHome(sel.value));
+  const prev = editor.onChange;
+  editor.onChange = (ed) => { sel.value = ed.home; if (prev) prev(ed); };
+  label.appendChild(sel);
+  return label;
+}
+
 /** Shared styles, injected once so every page that imports board.js gets them. */
 const CSS = `
 .bd { width: 100%; max-width: 420px; margin: 0 auto; }
@@ -197,6 +237,9 @@ button.bd-sq { cursor: pointer; }
   font: 500 9px/1 var(--font-mono); color: var(--fg-3); }
 .bd-sq[data-file]::after { content: attr(data-file); position: absolute; right: 2px; bottom: 1px;
   font: 500 9px/1 var(--font-mono); color: var(--fg-3); }
+.bd-home { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;
+  font-size: var(--text-sm); color: var(--fg-2); margin: 0; }
+.bd-home select { width: auto; min-height: 36px; }
 .bd-palette { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: var(--space-2); }
 .bd-palette-label { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--fg-2);
   min-width: 2.2em; }

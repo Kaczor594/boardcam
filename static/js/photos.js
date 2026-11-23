@@ -2,7 +2,7 @@
 // the same tap-to-fix editor as the clock page for boards skipped during play.
 // Protocol: docs/PROTOCOL.md §4–5.
 
-import { BoardEditor } from './board.js';
+import { BoardEditor, homeSelect } from './board.js';
 import { api, toast } from './ws.js';
 
 const gameId = new URLSearchParams(location.search).get('game');
@@ -105,7 +105,7 @@ function renderList() {
       item.appendChild(txt('div', 'ph-fen', p.confirmed.fen));
       const fixes = p.confirmed.corrections.length;
       item.appendChild(txt('p', 'muted num', `${fixes} square${fixes === 1 ? '' : 's'} fixed`
-        + (p.confirmed.home_changed ? ', board rotated' : '')));
+        + (p.confirmed.home_changed ? ", White's side changed" : '')));
     } else if (p.status === 'error') {
       item.appendChild(txt('p', 'ph-flags', `${p.error.reason}: ${p.error.detail || ''}`));
     } else if (p.position && !p.position.legal) {
@@ -154,9 +154,10 @@ function openEditor(p, item) {
   plus.addEventListener('click', () => { editing.ply += 1; showPly(); });
   showPly();
 
-  const rotate = txt('button', 'btn', 'Rotate');
-  rotate.type = 'button';
-  rotate.addEventListener('click', () => editor.rotate());
+  const flip = txt('button', 'btn', 'Flip view');
+  flip.type = 'button';
+  flip.title = 'Turn the diagram over; the position does not change';
+  flip.addEventListener('click', () => editor.flip());
   const undo = txt('button', 'btn', 'Undo fixes');
   undo.type = 'button';
   undo.addEventListener('click', () => editor.reset());
@@ -188,10 +189,12 @@ function openEditor(p, item) {
   });
 
   const tools = txt('div', 'row');
-  tools.append(minus, plyLabel, plus, txt('span', 'spacer'), rotate, undo);
+  tools.append(minus, plyLabel, plus, txt('span', 'spacer'), flip, undo);
+  const homeRow = txt('div', 'row');
+  homeRow.append(homeSelect(editor));
   const actions = txt('div', 'row');
   actions.append(save, cancel);
-  box.append(txt('h3', null, `Photo ${p.n}`), flags, boardEl, tools, actions);
+  box.append(txt('h3', null, `Photo ${p.n}`), flags, boardEl, tools, homeRow, actions);
   item.after(box);
   box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }

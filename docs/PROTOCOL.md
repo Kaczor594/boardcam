@@ -183,7 +183,7 @@ not an HTTP error: the response is `200` with `status: "error"`.
      "fen": "…", "home": "top", "home_guessed": false, "flags": [], "legal": true},
    "confirmed": {                  // null until a player confirms
      "rows": ["Q..K..NR", "..."],  // corrected photo-frame rows
-     "home": "top",                // corrected White home side ("Rotate")
+     "home": "top",                // White home side ("White's side in the photo"; "Flip view" never changes it)
      "ply": 6,                     // clock ply ±1
      "fen": "…",                   // the position of record for this photo
      "corrections": [{"r": 0, "c": 0, "read": "R", "now": "Q"}],
