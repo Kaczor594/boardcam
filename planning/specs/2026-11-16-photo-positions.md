@@ -2,7 +2,7 @@
 created: 2026-11-16                 # NEVER changes
 modified: [2026-11-16, 2026-11-16, 2026-11-17, 2026-11-17, 2026-11-17, 2026-11-18, 2026-11-18, 2026-11-23]  # append-only
 sessions: [2026-11-16, 2026-11-16, 2026-11-17, 2026-11-17, 2026-11-17, 2026-11-18, 2026-11-18, 2026-11-23]  # append-only; one entry per session that touches this spec
-commits: [d0620c2, 2b1bb2e, 74704c3, e4c1b4d, fbff00e, cfabf48, 6922fcf]               # append-only; short hashes, appended as phases land
+commits: [d0620c2, 2b1bb2e, 74704c3, e4c1b4d, fbff00e, cfabf48, 6922fcf, a38578c]               # append-only; short hashes, appended as phases land
 back_refs: [planning/specs/2026-09-12-boardcam.md]
 forward_refs: []
 status: in-progress                 # draft | in-progress | done | abandoned
