@@ -84,10 +84,12 @@ DB plus untracked `data/players.json`.
 
 ## Next Steps
 
-- [ ] Isaac: correct `20261121-115510-45fc` photo 4 (e3 black bishop) and
-      photo 5 (e3 black bishop, a2 white pawn) on the review page.
-- [ ] Next game: check the full-screen hint frame, either-way-round clock,
-      and that Accept no longer jumps the review page.
+- [ ] Next game: check on the phone the full-screen hint frame, the
+      either-way-round clock, Flip view vs "White's side in the photo", and
+      Accept stepping forward without the page jumping.
+- [ ] Ground truth: `20261121-110553-673e` has all 64 plies accepted (its
+      `pins.json` is the true game); guesses matched 45/63 plies (spec Notes).
+      Review Accept now steps to the next move; static files are no-cache.
 - [ ] `/spec build` resumes at Phase 5 (labelled data and a grid finder).
       Consider a material-count check that flags impossible reads before
       confirmation (field test: a misread was confirmed without looking).
