@@ -29,8 +29,13 @@ Method (classical, no training):
    the board. A shorter span (an edge file hidden under pieces, or off the
    photo) is extended to 8 on the side that is not visibly mat margin; a
    longer one keeps the 8-wide window with most inliers.
-5. Confidence: inlier share of the 32 dark squares, residual in squares, and
-   how the extent was decided.
+5. Lens bend: one radial distortion term about the photo centre, chosen as
+   the one under which the inlier vertices fit a single homography best; the
+   board corners are distorted back through it. Phone lenses and mats that do
+   not lie flat bend the edges a plain homography extrapolates to (photos
+   2777-2779, 3044 missed by 0.3-0.5 squares without it).
+6. Confidence: inlier share of the 32 dark squares, residual in squares (after
+   the lens bend), and how the extent was decided.
 
 Corner truth lives in a label set's ``truth.json`` as ``corners``: the outer
 corners of a8, h8, h1 and a1, in that order (board order, so a diagonal photo is
@@ -55,7 +60,8 @@ import cv2
 import numpy as np
 
 WORK_EDGE = 1600            # long edge the finder works at
-CONF_OK = 0.5               # below this a grid should be checked by hand
+CONF_OK = 0.5               # below this a grid should be checked by hand; not calibrated:
+                            # the 2026-11-23 eval had no misses to set it from
 BOARD_ORDER = ("a8", "h8", "h1", "a1")
 
 
@@ -302,6 +308,72 @@ def _extent(cells: list[tuple[int, int]], axis: int, mask: np.ndarray,
 # Entry point
 # --------------------------------------------------------------------------
 
+def _vertex_pairs(blobs: list[_Blob], cells: np.ndarray, ok: np.ndarray,
+                  H: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Inlier blob vertices matched to their lattice cell corners."""
+    S, D = [], []
+    for i in np.flatnonzero(ok):
+        q = blobs[i].quad
+        if q is None:
+            continue
+        cc = cells[i] + UNIT
+        pred = _apply(H, cc)
+        px = np.sqrt(blobs[i].area)
+        for p in q:
+            j = int(np.argmin(np.linalg.norm(pred - p, axis=1)))
+            if np.linalg.norm(pred[j] - p) < 0.25 * px:
+                S.append(cc[j]); D.append(p)
+    return np.array(S, np.float64).reshape(-1, 2), np.array(D, np.float64).reshape(-1, 2)
+
+
+def _undistort(P: np.ndarray, k: float, centre: np.ndarray, norm: float) -> np.ndarray:
+    d = (P - centre) / norm
+    return centre + (P - centre) * (1 + k * (d * d).sum(axis=1, keepdims=True))
+
+
+def _distort(P: np.ndarray, k: float, centre: np.ndarray, norm: float) -> np.ndarray:
+    """Inverse of ``_undistort`` by fixed-point iteration (k is small)."""
+    Q = P.copy()
+    for _ in range(20):
+        d = (Q - centre) / norm
+        Q = centre + (P - centre) / (1 + k * (d * d).sum(axis=1, keepdims=True))
+    return Q
+
+
+K_RANGE = np.linspace(-0.25, 0.25, 51)
+
+
+def _radial_corners(blobs, cells, ok, H, full: np.ndarray,
+                    shape: tuple[int, int]) -> tuple[np.ndarray, float, float]:
+    """Board corners with one radial lens-distortion term about the photo centre.
+
+    A phone lens bends the board's straight lines, most at the edges the
+    homography extrapolates to. Undistorting the square vertices with the
+    ``k`` that makes them fit one homography best, then distorting the board
+    corners back, follows the bend. Returns corners, k and the vertex rms in
+    squares at that k.
+    """
+    S, D = _vertex_pairs(blobs, cells, ok, H)
+    h, w = shape
+    centre = np.array([w / 2, h / 2])
+    norm = float(np.hypot(w, h) / 2)
+    px = float(np.median([np.sqrt(b.area) for b in blobs]))
+
+    def fit(k):
+        Du = _undistort(D, k, centre, norm)
+        Hk, _ = cv2.findHomography(S, Du, 0)
+        if Hk is None:
+            return None, np.inf
+        r = np.linalg.norm(_apply(Hk, S) - Du, axis=1) / px
+        return Hk, float(np.sqrt(np.mean(r * r)))
+
+    if len(S) < 24:
+        return _apply(H, full), 0.0, np.inf
+    best = min(((fit(k), k) for k in K_RANGE), key=lambda t: t[0][1])
+    (Hk, rms), k = best
+    return _distort(_apply(Hk, full), k, centre, norm), float(k), rms
+
+
 def _work_image(image) -> tuple[np.ndarray, float]:
     from .reader import load_image
     img = load_image(image)
@@ -336,22 +408,11 @@ def find_grid(image, board: str = "green") -> Grid:
     j0, how_j = _extent(seen, 1, thick, H)
     inside = [c for c in seen if i0 <= c[0] < i0 + 8 and j0 <= c[1] < j0 + 8]
 
-    # Residual of the inlier blob vertices, in squares.
-    res = []
-    for i in np.flatnonzero(ok):
-        q = blobs[i].quad
-        if q is None:
-            continue
-        pred = _apply(H, cells[i] + UNIT)
-        px = np.sqrt(blobs[i].area)
-        for p in q:
-            d = np.linalg.norm(pred - p, axis=1).min() / px
-            if d < 0.25:
-                res.append(d)
-    rms = float(np.sqrt(np.mean(np.square(res)))) if res else 1.0
-
     full = np.array([[i0, j0], [i0 + 8, j0], [i0 + 8, j0 + 8], [i0, j0 + 8]], np.float64)
-    corners = _order_cw(_apply(H, full)) / scale
+    # rms: inlier vertices against the fitted board, in squares.
+    rc, k, rms = _radial_corners(blobs, cells, ok, H, full, mask.shape)
+    rms = rms if np.isfinite(rms) else 1.0
+    corners = _order_cw(rc) / scale
 
     hows = (how_i, how_j)
     f_ext = 1.0
@@ -362,7 +423,7 @@ def find_grid(image, board: str = "green") -> Grid:
     conf = round(f_n * f_res * f_ext, 3)
     return Grid(corners.round(1).tolist(), conf,
                 {"squares": len(inside), "rms": round(rms, 4), "extent": list(hows),
-                 "blobs": len(blobs)})
+                 "blobs": len(blobs), "k": round(k, 3)})
 
 
 # --------------------------------------------------------------------------

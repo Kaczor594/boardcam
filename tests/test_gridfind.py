@@ -125,3 +125,21 @@ def test_board_corner_order_matches_square_of(home):
     import chess
     for name, k in zip(names, board_corner_order(home)):
         assert chess.square_name(square_of(*cell[k], home)) == name
+
+
+def test_lens_distortion_is_followed_to_the_corners():
+    # Bend the clear mat with one radial term about the photo centre, as a
+    # phone lens does; the corners must follow the bend, not a straight fit.
+    img = np.asarray(render())
+    h, w = img.shape[:2]
+    centre, norm, k = np.array([w / 2, h / 2]), float(np.hypot(w, h) / 2), -0.08
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    # Output pixel p shows the undistorted point _undistort(p).
+    src = G._undistort(np.stack([xs.ravel(), ys.ravel()], 1).astype(np.float64), k, centre, norm)
+    mx = src[:, 0].reshape(h, w).astype(np.float32)
+    my = src[:, 1].reshape(h, w).astype(np.float32)
+    bent = cv2.remap(img, mx, my, cv2.INTER_LINEAR, borderValue=WOOD)
+    truth = G._distort(CORNERS, k, centre, norm)
+    g = G.find_grid(Image.fromarray(bent))
+    assert max_err(g, truth) < 0.1, g.info
+    assert g.info["k"] == pytest.approx(k, abs=0.02)

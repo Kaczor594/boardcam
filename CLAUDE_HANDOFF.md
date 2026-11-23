@@ -19,9 +19,11 @@ and measured accuracy). The September stand-camera spec is abandoned.
 
 ## Current State
 
-Phase 5 (labelled data + grid finder) is built but its gate is open,
-waiting on Isaac: corner taps on `/label`, ~16+ staged rare-piece photos and
-~5 diagonal photos (see Next Steps). Phases 1–4 of the spec are built and gated. First field test 2026-11-21:
+Phase 5 (labelled data + grid finder) is built. Its grid-finder gate passed
+2026-11-23 on Isaac's corner taps: 45/45 green-mat photos within 0.25 squares,
+median 0.045, after adding a radial lens-distortion term; crops are cut. The
+gate is still open on data: 45 labelled green-mat photos of the 60 needed,
+plus the staged and diagonal photos (see Next Steps). Phases 1–4 of the spec are built and gated. First field test 2026-11-21:
 three real games (`data/games/20261121-*`), lichess import fine, photo gaps
 6–16 plies plus one of 25. The only failure was a read error (bishop read as
 rook on e3 in `20261121-115510-45fc` photos 4–5, confirmed unchanged), which
@@ -99,13 +101,11 @@ DB plus untracked `data/players.json`.
 - [ ] Ground truth: `20261121-110553-673e` has all 64 plies accepted (its
       `pins.json` is the true game); guesses matched 45/63 plies (spec Notes).
       Review Accept now steps to the next move; static files are no-cache.
-- [ ] Phase 5, Isaac: on `/label` (Mac browser is easiest) tap the corners
-      of all 45 green-mat photos (filter "needs corners"), check the 13 game
-      photos (filter "game photos not checked"; `45fc` photos 4–5 had a
-      misread), upload ≥ 16 staged rare-piece photos (queens, rooks, bishops;
-      target 30) and ~5 diagonal photos, and label the wooden boards if that
-      set matters. Then `/spec build` re-runs the Phase 5 gate:
-      `gridfind --eval`, set `CONF_OK` from it, `labels --crops`, inventory.
+- [ ] Phase 5, Isaac: upload ≥ 16 staged rare-piece photos (queens, rooks,
+      bishops; target 30) and ~5 diagonal photos on `/label`, tap their
+      corners, and label the wooden boards if that set matters. Then
+      `/spec build` re-runs `labels --crops` and the inventory (needs ≥ 60).
+      `CONF_OK` stays 0.5, uncalibrated: the eval had no misses.
 - [ ] Diagonal-prompt experiment (Phase 5 task) once the diagonal photos exist.
 - [ ] Consider a material-count check that flags impossible reads before
       confirmation (field test: a misread was confirmed without looking).

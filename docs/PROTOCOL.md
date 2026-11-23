@@ -566,8 +566,10 @@ checked by hand. Method in the module docstring: green-square mask → square
 blobs → lattice homography grown ring by ring from each seed square → 8×8
 extent (a hidden edge rank is added on the side whose added dark cells show
 more green than its light cells, which tells the board from the mat's green
-frame band) → confidence from inlier count, residual and how the extent was
-decided. `auto` (other boards) is a local-threshold mask and is unreliable;
+frame band) → one radial lens-distortion term about the photo centre, fitted
+to the square vertices, through which the corners are bent back (`info["k"]`)
+→ confidence from inlier count, residual after the bend, and how the extent
+was decided. `auto` (other boards) is a local-threshold mask and is unreliable;
 its confidence stays low when it is wrong.
 
 `square_crops(image, corners_board)` → `{"a1": crop, …}`: crop 64×112, the
