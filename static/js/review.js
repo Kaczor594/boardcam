@@ -14,7 +14,7 @@ const $ = (id) => document.getElementById(id);
 const RESULTS = ['1-0', '0-1', '1/2-1/2', '*'];
 const CLAMP = 6;   // pawns, for the graph
 
-const state = { data: null, i: 0, engine: new Map(), poll: null, busy: false };
+const state = { data: null, i: 0, engine: new Map(), poll: null, busy: false, follow: null };
 const board = new BoardEditor($('board'), { rows: rowsFromFen('8/8/8/8/8/8/8/8 w - - 0 1'), home: 'bottom' });
 
 function el(tag, cls, text) {
@@ -52,6 +52,13 @@ async function load({ quiet = false } = {}) {
   $('content').hidden = false;
   const tl = state.data.timeline;
   if (state.i >= tl.length) state.i = tl.length - 1;
+  // After an accept, step onto the accepted move as soon as the timeline
+  // contains it (at once if it was already the top line, else after the re-solve).
+  if (state.follow) {
+    const k = tl.findIndex((e) => e.ply === state.follow.ply && e.uci === state.follow.uci);
+    if (k >= 0) { state.i = k; state.follow = null; }
+    else if (!state.data.solving && !state.data.stale) state.follow = null;
+  }
   renderAll();
   schedulePoll();
 }
@@ -245,9 +252,10 @@ async function pinMove(ply, uci) {
   state.busy = true;
   try {
     await api(`/api/games/${gameId}/pins`, { method: 'POST', body: { ply, uci } });
-    toast('Move accepted; working out the rest of the gap');
+    state.follow = { ply, uci };
     await solve();
     await load({ quiet: true });
+    if (state.follow) toast('Move accepted; working out the rest of the gap');
   } catch (err) {
     toast(`Not accepted: ${err.message}`);
   } finally {
