@@ -46,6 +46,11 @@ async def skip_ngrok_interstitial(request: Request, call_next):
     """Tell ngrok not to serve its warning page for our own responses."""
     response = await call_next(request)
     response.headers["ngrok-skip-browser-warning"] = "1"
+    # Scripts and styles change with every fix and carry no version in their
+    # URL: make the browser revalidate (cheap 304 via the ETag) instead of
+    # running a heuristically cached old copy.
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 
