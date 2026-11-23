@@ -26,7 +26,7 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import gaps, photos, review, storage
+from . import gaps, labelsapi, photos, review, storage
 from .lichess import import_pgn
 from .models import CLOCK_EVENTS, READER_MODELS, SETTING_KEYS, Confirm, GameConfig, GameSettings
 from .ws import hub, now_ms
@@ -34,6 +34,7 @@ from .ws import hub, now_ms
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 app = FastAPI(title="BoardCam", version="0.2.0")
+app.include_router(labelsapi.router)
 
 
 @app.on_event("shutdown")
@@ -78,6 +79,11 @@ async def clock_page():
 @app.get("/games")
 async def games_page():
     return _page("games.html")
+
+
+@app.get("/label")
+async def label_page():
+    return _page("label.html")
 
 
 @app.get("/review")

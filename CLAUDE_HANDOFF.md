@@ -19,7 +19,9 @@ and measured accuracy). The September stand-camera spec is abandoned.
 
 ## Current State
 
-Phases 1–4 of the spec are built and gated. First field test 2026-11-21:
+Phase 5 (labelled data + grid finder) is built but its gate is open,
+waiting on Isaac: corner taps on `/label`, ~16+ staged rare-piece photos and
+~5 diagonal photos (see Next Steps). Phases 1–4 of the spec are built and gated. First field test 2026-11-21:
 three real games (`data/games/20261121-*`), lichess import fine, photo gaps
 6–16 plies plus one of 25. The only failure was a read error (bishop read as
 rook on e3 in `20261121-115510-45fc` photos 4–5, confirmed unchanged), which
@@ -65,6 +67,9 @@ DB plus untracked `data/players.json`.
 | `engine/evalgraph.py`, `pgn.py` | Stockfish wrapper; PGN from the timeline |
 | `static/clock.html`, `js/clock.js`, `js/clocksm.js` | Clock + camera page; `photoHint` rule |
 | `static/review.html`, `js/review.js`, `js/photos.js`, `js/board.js` | Review page; board + arrows |
+| `engine/labels.py`, `server/labelsapi.py`, `static/label.html`, `js/label.js` | Label store, game-photo intake on confirm, label page (PROTOCOL §10) |
+| `engine/gridfind.py` | Playing-area corners from a hand-held photo; square crops; `--eval`/`--overlay` |
+| `engine/train_local.py` | `--inventory` now; the local classifier is Phase 6 |
 | `scripts/replay_game.py` | Solve a recorded game (or build a `--demo` one) with real engines |
 
 ## Gotchas
@@ -79,8 +84,12 @@ DB plus untracked `data/players.json`.
   `fullmove = ply // 2 + 1`, so `board.ply()` is the game ply.
 - Headless Chrome's window is at least 500 px wide; check phone layouts inside
   a 390 px iframe.
-- Confirmed labels for Phase 5 accumulate in each game's `positions.json`
-  (`read` beside `confirmed`).
+- Confirmed game photos are copied into `data/labels/<meta.board_set or
+  green-mat>/` on confirm (`g<game_id>-<nnn>`, `checked: false` until looked
+  at on `/label`). There is no settings control for `board_set` yet: add one
+  before the first wooden-board game.
+- Corner truth is in board order (a8, h8, h1, a1), never photo frame.
+- The mat's green frame band is the grid finder's main trap (see spec Notes).
 
 ## Next Steps
 
@@ -90,6 +99,13 @@ DB plus untracked `data/players.json`.
 - [ ] Ground truth: `20261121-110553-673e` has all 64 plies accepted (its
       `pins.json` is the true game); guesses matched 45/63 plies (spec Notes).
       Review Accept now steps to the next move; static files are no-cache.
-- [ ] `/spec build` resumes at Phase 5 (labelled data and a grid finder).
-      Consider a material-count check that flags impossible reads before
+- [ ] Phase 5, Isaac: on `/label` (Mac browser is easiest) tap the corners
+      of all 45 green-mat photos (filter "needs corners"), check the 13 game
+      photos (filter "game photos not checked"; `45fc` photos 4–5 had a
+      misread), upload ≥ 16 staged rare-piece photos (queens, rooks, bishops;
+      target 30) and ~5 diagonal photos, and label the wooden boards if that
+      set matters. Then `/spec build` re-runs the Phase 5 gate:
+      `gridfind --eval`, set `CONF_OK` from it, `labels --crops`, inventory.
+- [ ] Diagonal-prompt experiment (Phase 5 task) once the diagonal photos exist.
+- [ ] Consider a material-count check that flags impossible reads before
       confirmation (field test: a misread was confirmed without looking).

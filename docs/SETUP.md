@@ -126,6 +126,17 @@ times, a running one with the time that passed charged to the side to move.
 A photo whose upload was cut off by the reload is lost; take it again. A read
 that was already running on the server finishes and appears on the phone.
 
+## 4b. Labelling photos (training data)
+
+Open `/label` (linked from the start page). Every photo confirmed in a game
+is already there (filter "game photos not checked"). For each photo: check
+the board against the photo ("Draft with Fable" for a new one), tap the four
+outer corners of the 8×8 squares (not the mat's border), check that a1 sits
+at White's left-hand corner ("Turn corner names" if not), tick "board is
+correct", "Save and next". New photos (staged positions, diagonal shots)
+upload from the bottom of the page. A Mac browser is easiest for the corners;
+on the phone, drag a corner to adjust it.
+
 ## 5. Troubleshooting
 
 | Symptom | Likely cause | Fix |

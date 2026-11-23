@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Labels · BoardCam</title>
+<link rel="stylesheet" href="/static/css/boardcam.css">
+<style>
+  .wrap.wide { max-width: 1280px; }
+  header.page { display: flex; align-items: baseline; gap: var(--space-4); flex-wrap: wrap; }
+  .bar { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; margin-bottom: var(--space-4); }
+  .bar select { width: auto; min-height: 40px; }
+  .bar .grow { flex: 1 1 12em; min-width: 0; }
+  #pos { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--fg-2); }
+
+  .lab-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px);
+    gap: var(--space-5); align-items: start; }
+  @media (max-width: 900px) { .lab-grid { grid-template-columns: minmax(0, 1fr); } }
+
+  #photo-wrap { position: relative; }
+  #photo { display: block; width: 100%; height: auto; max-height: 82vh; object-fit: contain;
+    touch-action: none; cursor: crosshair; background: var(--bg-sunken); }
+  #loupe { position: absolute; top: var(--space-2); left: var(--space-2); width: 168px; height: 168px;
+    border: 2px solid var(--ink); border-radius: 50%; pointer-events: none; display: none;
+    background: var(--bg-raised); }
+  #corner-line { font-size: var(--text-sm); color: var(--fg-2); margin: var(--space-2) 0 0; }
+  #corner-line.ok { color: var(--positive); }
+
+  .meta { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--fg-2);
+    margin: 0 0 var(--space-3); overflow-wrap: anywhere; }
+  .controls { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-3); }
+  .controls .row { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
+  .controls label.chk { display: flex; gap: var(--space-2); align-items: center; font-size: var(--text-sm); }
+  .controls input[type=text] { flex: 1 1 10em; min-width: 0; }
+  #status { font-size: var(--text-sm); color: var(--fg-2); min-height: 1.4em; margin: 0; }
+  #status.warn { color: var(--warning); }
+  .help { font-size: var(--text-xs); color: var(--fg-3); margin: var(--space-2) 0 0; }
+</style>
+</head>
+<body>
+<main class="wrap wide">
+  <header class="page">
+    <h1>Labels</h1>
+    <a href="/" class="muted">BoardCam</a>
+  </header>
+
+  <div class="bar">
+    <select id="set" aria-label="Label set"></select>
+    <select id="filter" aria-label="Show">
+      <option value="all">all photos</option>
+      <option value="board">needs a board</option>
+      <option value="corners">needs corners</option>
+      <option value="unchecked">game photos not checked</option>
+    </select>
+    <select id="pick" class="grow" aria-label="Photo"></select>
+    <button class="btn" id="prev" type="button" aria-label="Previous photo">←</button>
+    <button class="btn" id="next" type="button" aria-label="Next photo">→</button>
+    <span id="pos"></span>
+  </div>
+
+  <div class="lab-grid">
+    <section class="card">
+      <div id="photo-wrap">
+        <canvas id="photo" aria-label="Photo; tap the four corners of the playing area"></canvas>
+        <canvas id="loupe" width="168" height="168" aria-hidden="true"></canvas>
+      </div>
+      <p id="corner-line"></p>
+      <div class="row" style="display:flex;gap:var(--space-2);flex-wrap:wrap;margin-top:var(--space-2)">
+        <button class="btn" id="turn" type="button">Turn corner names</button>
+        <button class="btn" id="clear-corners" type="button">Clear corners</button>
+      </div>
+      <p class="help">Tap the four outer corners of the 8×8 squares (not the mat's border), in any
+        order; drag a corner to move it. Then check the names: a1 is White's left-hand corner.
+        Off the photo? Tap at the edge as near as you can and exclude it if it is far off.</p>
+    </section>
+
+    <section class="card">
+      <p class="meta" id="meta"></p>
+      <div id="board"></div>
+      <div class="controls">
+        <div id="home-slot"></div>
+        <div class="row">
+          <button class="btn" id="draft" type="button">Draft with Fable</button>
+          <button class="btn" id="flip" type="button">Flip view</button>
+          <button class="btn" id="undo" type="button">Undo fixes</button>
+          <button class="btn" id="empty" type="button">Empty board</button>
+        </div>
+        <label class="chk"><input type="checkbox" id="done"> board is correct</label>
+        <div class="row">
+          <label class="chk"><input type="checkbox" id="exc"> exclude — why</label>
+          <input type="text" id="why" aria-label="Reason for excluding">
+        </div>
+        <div class="row">
+          <button class="btn btn-primary" id="save" type="button">Save</button>
+          <button class="btn" id="save-next" type="button">Save and next</button>
+        </div>
+        <p id="status" role="status"></p>
+      </div>
+    </section>
+  </div>
+
+  <section class="card" style="margin-top:var(--space-5)">
+    <h2>Add photos</h2>
+    <div class="row" style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center">
+      <select id="up-split" aria-label="Kind of photo">
+        <option value="staged">staged (rare pieces)</option>
+        <option value="diagonal">diagonal (across a corner)</option>
+        <option value="upload">other</option>
+      </select>
+      <input type="file" id="up-files" accept="image/*" multiple>
+      <button class="btn" id="up-go" type="button">Upload</button>
+    </div>
+    <p class="help">On the phone, "Take Photo" or the library both work. The session is the photo's
+      capture date.</p>
+  </section>
+</main>
+<script type="module" src="/static/js/label.js"></script>
+</body>
+</html>

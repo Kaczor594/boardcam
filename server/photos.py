@@ -8,6 +8,7 @@ can stub it (``photos.READER = fake``) without touching the network.
 from __future__ import annotations
 
 import io
+import logging
 import time
 
 from PIL import Image, ImageOps
@@ -19,6 +20,8 @@ from . import storage
 
 # (image_bytes, model) -> BoardRead. Replaced in tests.
 READER = lambda blob, model: reader_mod.read_position(blob, model=model)  # noqa: E731
+
+log = logging.getLogger(__name__)
 
 EMPTY_ROWS = ["........"] * 8
 
@@ -196,4 +199,16 @@ def confirm(game_id: str, n: int, rows: list[str], home: str, ply: int) -> dict:
         }
         return e
 
-    return storage.update_positions(game_id, apply)
+    entry = storage.update_positions(game_id, apply)
+    _to_label_store(game_id, n)
+    return entry
+
+
+def _to_label_store(game_id: str, n: int) -> None:
+    """Every confirmed photo is a training label for the local reader (spec
+    Phase 5). A failure here must never fail the confirmation."""
+    try:
+        from engine import labels
+        labels.add_from_game(storage.game_dir(game_id), n)
+    except Exception:  # noqa: BLE001
+        log.exception("label store: could not add %s photo %d", game_id, n)

@@ -492,3 +492,93 @@ placement (board frame), entered on `label-holdout.html` from
 `--merge`. `engine.read_eval` scores in board coordinates (see its docstring):
 `per-square`, `occupied-square`, `perfect-board` at the best-fitting
 orientation, `home-side`, `fen-correct`, cost and seconds per photo, confusions.
+
+---
+
+## 10. Labels and the grid finder (photo-positions spec, Phase 5)
+
+Training and evaluation data for the local reader (Phase 6) and the grid
+finder. Everything lives under `data/labels/<set>/` and is never committed.
+
+### Label store (`engine/labels.py`)
+
+One set per physical board and piece set (`green-mat`, `wood-board`).
+`truth.json` entry:
+
+| key | meaning |
+|---|---|
+| `session` | capture date (`YYYY-MM-DD`); splits for training are by session, never by square |
+| `split` | `pilot`, `holdout` (never tune a prompt on it), `games`, `staged`, `diagonal`, `upload`, `unlabelled` |
+| `rows`, `home` | photo-frame board (§9) and White's home side |
+| `fen` | board-frame placement; the label page writes it beside `rows` |
+| `done`, `excluded` | labelled / why the photo is left out |
+| `corners` | `[[x, y] × 4]`: the outer corners of **a8, h8, h1, a1**, in upright full-resolution pixels (EXIF applied). Board order, so a diagonal photo is unambiguous |
+| `source` | `pilot`, `holdout`, `game:<game_id>/<n>`, `upload` |
+| `checked` | looked at on the label page |
+
+- **Game photos flow in on confirm.** `photos.confirm` (§5) calls
+  `labels.add_from_game` after storing: photo hard-linked as
+  `g<game_id>-<nnn>.jpg`, `split: games`, session = the game's date, truth =
+  the confirmed rows/home, `checked: false`. The set is the game's
+  `meta.board_set` (default `green-mat`); demo games are skipped. A failure is
+  logged and never fails the confirmation. Re-confirming updates the label
+  unless it has been checked on the label page since. Backfill:
+  `python -m engine.labels --ingest-games`.
+- A confirmed game photo is not ground truth (the 2026-11-21 field test
+  confirmed a misread), hence `checked`.
+- `rows_from_fen(fen, home)`, `fen_from_rows(rows, home)`, `placement(entry)`,
+  `board_corner_order(home)` (indices into the photo-frame corners TL, TR,
+  BR, BL that give a8, h8, h1, a1).
+- Crops: `python -m engine.labels --crops data/labels/<set>` writes
+  `crops/<name>.npz` (`crops` uint8 `[64, 112, 64, 3]`, `squares`, `labels`)
+  for every labelled photo with corners, plus `crops/index.json` (session,
+  split).
+
+### Label page (`/label`, `static/label.html`, `static/js/label.js`)
+
+Pick a set and a filter (needs a board / needs corners / unchecked game
+photos), "Draft with Fable", fix squares with the same editor as the game
+pages, set White's side, tap the four corners, mark done or excluded, save.
+Corners are never pre-filled from the grid finder, so its evaluation is not
+anchored on its own answer. Four taps in any order: the page orders them
+clockwise from the image's top-left and names them a8/h8/h1/a1 from White's
+side; "Turn corner names" rotates the naming when the side is wrong for the
+corners only. Drag a corner to move it; a loupe shows 4× around the pointer.
+Upload adds photos (`staged`, `diagonal`, `upload`), session from EXIF.
+
+| endpoint | |
+|---|---|
+| `GET /api/labels` | `{"sets": [{set, photos, labelled, corners, unchecked}]}` |
+| `GET /api/labels/{set}` | `{"set", "photos": [{name, split, session, done, excluded, source, checked, corners: bool}]}` |
+| `GET /api/labels/{set}/{name}` | the entry, with `rows`/`home` filled from `fen` and a cached read's home side when only a FEN exists; `size` (full-res upright `[w, h]`), `view_edge` |
+| `GET /labels/{set}/photos/{name}` | upright JPEG, long edge ≤ 2000, no EXIF: the frame the page taps in |
+| `POST /api/labels/{set}/{name}/draft` | reader read (`claude-fable-5-2`, photo variant), cached in `reads/` exactly like `engine.read_eval`; `502` on a reader error |
+| `PUT /api/labels/{set}/{name}` | body `{rows, home, corners (a8, h8, h1, a1, full-res px) \| null, done, excluded}`; sets `checked`; `400` on a malformed board or corners. Legality is not required (staged photos need no kings) |
+| `POST /api/labels/{set}/upload` | multipart `files` (one or more) + `split`; returns `{"added": [names]}` |
+
+### Grid finder (`engine/gridfind.py`)
+
+`find_grid(image, board="green"|"auto") -> Grid(corners, confidence, info)`:
+corners of the playing area, upright full-res pixels, clockwise from the one
+nearest the image's top-left (orientation is the reader's or the label's
+job); `confidence` in [0, 1], `CONF_OK = 0.5` below which a grid should be
+checked by hand. Method in the module docstring: green-square mask → square
+blobs → lattice homography grown ring by ring from each seed square → 8×8
+extent (a hidden edge rank is added on the side whose added dark cells show
+more green than its light cells, which tells the board from the mat's green
+frame band) → confidence from inlier count, residual and how the extent was
+decided. `auto` (other boards) is a local-threshold mask and is unreliable;
+its confidence stays low when it is wrong.
+
+`square_crops(image, corners_board)` → `{"a1": crop, …}`: crop 64×112, the
+square's base at the bottom centre (0.8 square widths either side, 2.6 above,
+0.55 below), axis-aligned in the photo, so a piece always stands upright in
+the same place and a tall neighbour cannot be mistaken for the target.
+
+`python -m engine.gridfind --eval data/labels/<set>` scores against corner
+truth: per-corner error in squares (the square size at that truth corner), at
+the best cyclic rotation and direction; median corner error, share of photos
+whose worst corner is within 0.25 squares, and whether every miss is below
+`CONF_OK`. `--overlay` writes `gridfind/<name>.jpg` with the found grid (red)
+and the truth (yellow).
+
