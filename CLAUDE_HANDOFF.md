@@ -1,6 +1,6 @@
 # Claude Code Handoff — BoardCam
 
-> Last updated: 2026-11-23
+> Last updated: 2026-11-25
 > Repo: https://github.com/Kaczor594/boardcam.git (public)
 > Branch: main
 
@@ -92,6 +92,11 @@ DB plus untracked `data/players.json`.
   before the first wooden-board game.
 - Corner truth is in board order (a8, h8, h1, a1), never photo frame.
 - The mat's green frame band is the grid finder's main trap (see spec Notes).
+- Phone photos bend: the grid finder fits one radial lens term per photo
+  (`info["k"]`, from the squares' own vertices). Without it 7/45 green-mat
+  grids missed by 0.25–0.5 squares at the edges. Don't tune grid-finder
+  constants on the 45 tapped photos: they are the gate set.
+- Everything is pushed (4a2332b, 2026-11-23); `data/` is never committed.
 
 ## Next Steps
 
